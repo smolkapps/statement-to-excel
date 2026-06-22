@@ -1,0 +1,55 @@
+{
+  "plans": [
+    {
+      "id": "free",
+      "name": "Free",
+      "monthly_price_usd": "0",
+      "included_pages": 3,
+      "overage_per_page_usd": "0"
+    },
+    {
+      "id": "starter",
+      "name": "Starter",
+      "monthly_price_usd": "29",
+      "included_pages": 120,
+      "overage_per_page_usd": "0.30"
+    },
+    {
+      "id": "business",
+      "name": "Business",
+      "monthly_price_usd": "79",
+      "included_pages": 500,
+      "overage_per_page_usd": "0.20"
+    },
+    {
+      "id": "firm",
+      "name": "Firm",
+      "monthly_price_usd": "199",
+      "included_pages": 2000,
+      "overage_per_page_usd": "0.12"
+    }
+  ],
+  "credit_packs": [
+    {
+      "id": "pack_50",
+      "name": "50 credits",
+      "credits": 50,
+      "price_usd": "30",
+      "per_credit_usd": "0.6000"
+    },
+    {
+      "id": "pack_200",
+      "name": "200 credits",
+      "credits": 200,
+      "price_usd": "100",
+      "per_credit_usd": "0.5000"
+    },
+    {
+      "id": "pack_1000",
+      "name": "1,000 credits",
+      "credits": 1000,
+      "price_usd": "400",
+      "per_credit_usd": "0.4000"
+    }
+  ]
+}
