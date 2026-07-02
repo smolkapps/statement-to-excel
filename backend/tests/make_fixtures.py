@@ -46,7 +46,7 @@ def make_acmebank():
         ["01/19/2024", "REFUND - AMAZON.COM", "", "29.99", "3,395.78"],
         ["01/27/2024", "CITY POWER & LIGHT", "142.55", "", "3,253.23"],
     ]
-    c = canvas.Canvas(str(FIX / "acmebank.pdf"), pagesize=LETTER)
+    c = canvas.Canvas(str(FIX / "acmebank.pdf"), pagesize=LETTER, invariant=1)
     w, h = LETTER
     c.setFont("Helvetica-Bold", 16)
     c.drawString(1 * inch, h - 1 * inch, "ACME BANK — Checking Statement")
@@ -128,7 +128,7 @@ def make_columnarcredit():
         ["2024-02-15", "STATEMENT CREDIT", "(25.00)", "1,394.05"],
         ["2024-02-21", "APPLE.COM/BILL", "9.99", "1,404.04"],
     ]
-    c = canvas.Canvas(str(FIX / "columnarcredit.pdf"), pagesize=LETTER)
+    c = canvas.Canvas(str(FIX / "columnarcredit.pdf"), pagesize=LETTER, invariant=1)
     w, h = LETTER
     c.setFont("Helvetica-Bold", 16)
     c.drawString(1 * inch, h - 1 * inch, "Columnar Credit Card — February 2024")
@@ -199,7 +199,7 @@ def make_columnarcredit():
 # 3) minimalchecking — borderless text, "Mon DD" dates, year only in header
 # --------------------------------------------------------------------------- #
 def make_minimalchecking():
-    c = canvas.Canvas(str(FIX / "minimalchecking.pdf"), pagesize=LETTER)
+    c = canvas.Canvas(str(FIX / "minimalchecking.pdf"), pagesize=LETTER, invariant=1)
     w, h = LETTER
     c.setFont("Courier-Bold", 12)
     c.drawString(1 * inch, h - 1 * inch, "MINIMAL CREDIT UNION")
@@ -272,7 +272,7 @@ def make_minimalchecking():
 # 4) scanned_empty — a page with an image-ish block but NO text layer
 # --------------------------------------------------------------------------- #
 def make_scanned_empty():
-    c = canvas.Canvas(str(FIX / "scanned_empty.pdf"), pagesize=LETTER)
+    c = canvas.Canvas(str(FIX / "scanned_empty.pdf"), pagesize=LETTER, invariant=1)
     w, h = LETTER
     # Draw only vector rectangles — no text operators -> extract_text() == "".
     c.setFillColor(colors.lightgrey)

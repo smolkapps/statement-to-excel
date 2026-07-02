@@ -1,0 +1,42 @@
+[
+  {
+    "date": "2024-01-05",
+    "description": "ACH PAYROLL DEPOSIT",
+    "amount": "3250.00",
+    "balance": "5250.00",
+    "currency": "USD",
+    "type": "credit"
+  },
+  {
+    "date": "2024-01-08",
+    "description": "WHOLE FOODS MARKET #123",
+    "amount": "-84.21",
+    "balance": "5165.79",
+    "currency": "USD",
+    "type": "debit"
+  },
+  {
+    "date": "2024-01-12",
+    "description": "RENT - OAK PROPERTY MGMT",
+    "amount": "-1800.00",
+    "balance": "3365.79",
+    "currency": "USD",
+    "type": "debit"
+  },
+  {
+    "date": "2024-01-19",
+    "description": "REFUND - AMAZON.COM",
+    "amount": "29.99",
+    "balance": "3395.78",
+    "currency": "USD",
+    "type": "credit"
+  },
+  {
+    "date": "2024-01-27",
+    "description": "CITY POWER & LIGHT",
+    "amount": "-142.55",
+    "balance": "3253.23",
+    "currency": "USD",
+    "type": "debit"
+  }
+]

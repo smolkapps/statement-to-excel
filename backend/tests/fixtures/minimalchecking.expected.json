@@ -1,0 +1,42 @@
+[
+  {
+    "date": "2024-03-03",
+    "description": "DIRECT DEPOSIT EMPLOYER INC",
+    "amount": "2100.00",
+    "balance": "3600.00",
+    "currency": "USD",
+    "type": "credit"
+  },
+  {
+    "date": "2024-03-07",
+    "description": "GROCERY OUTLET produce dept downtown",
+    "amount": "58.40",
+    "balance": "3541.60",
+    "currency": "USD",
+    "type": "credit"
+  },
+  {
+    "date": "2024-03-14",
+    "description": "ELECTRIC UTILITY AUTOPAY",
+    "amount": "120.00",
+    "balance": "3421.60",
+    "currency": "USD",
+    "type": "credit"
+  },
+  {
+    "date": "2024-03-22",
+    "description": "ATM WITHDRAWAL",
+    "amount": "200.00",
+    "balance": "3221.60",
+    "currency": "USD",
+    "type": "credit"
+  },
+  {
+    "date": "2024-03-29",
+    "description": "INTEREST PAYMENT",
+    "amount": "1.25",
+    "balance": "3222.85",
+    "currency": "USD",
+    "type": "credit"
+  }
+]
