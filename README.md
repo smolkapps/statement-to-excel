@@ -153,11 +153,11 @@ reportlab (`backend/tests/make_fixtures.py`) — no private data.
 cd backend && . .venv/bin/activate
 pip install -e ".[test]"
 python tests/make_fixtures.py     # (re)generate fixtures (also auto-built by conftest)
-pytest                            # 79 tests
+pytest                            # 81 tests
 
 # Frontend
 cd frontend && npm install
-npm test                          # 29 tests (vitest)
+npm test                          # 37 tests (vitest)
 ```
 
 What's covered: exact-equality parsing on a clean ruled fixture; field-accuracy
