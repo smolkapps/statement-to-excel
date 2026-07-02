@@ -87,9 +87,6 @@ def summarize(txns: Sequence[Transaction], currency: str = "USD") -> StatementSu
 # Year inference (for "Mon DD" style statements that omit the year per-row)
 # --------------------------------------------------------------------------- #
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
-_DAYFIRST_HINT_RE = re.compile(
-    r"\b(DD/MM|DD-MM|day\s*/\s*month|statement\s+period)\b", re.IGNORECASE
-)
 
 
 def _infer_year(text: str) -> Optional[int]:

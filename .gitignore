@@ -29,7 +29,5 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Generated test artifacts (synthetic fixtures are rebuilt by conftest/make_fixtures)
+# Generated test artifacts
 *.tmp
-backend/tests/fixtures/*.pdf
-backend/tests/fixtures/*.expected.json

@@ -152,8 +152,8 @@ reportlab (`backend/tests/make_fixtures.py`) — no private data.
 # Backend
 cd backend && . .venv/bin/activate
 pip install -e ".[test]"
-python tests/make_fixtures.py     # generate fixtures (also auto-built by conftest on first run)
-pytest                            # 77 tests
+python tests/make_fixtures.py     # (re)generate fixtures (also auto-built by conftest)
+pytest                            # 79 tests
 
 # Frontend
 cd frontend && npm install

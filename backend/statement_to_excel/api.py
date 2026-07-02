@@ -18,8 +18,8 @@ app end-to-end via Starlette's TestClient.
 
 from __future__ import annotations
 
+import base64
 import io
-from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from . import __version__
 from .billing import InsufficientCredits, Ledger, PRICING, get_provider
 from .engine import ConversionError, convert_pdf, summarize
-from .writers import to_csv_bytes, to_json_bytes, to_xlsx_bytes
+from .writers import to_csv_bytes, to_xlsx_bytes
 
 # A process-wide ledger + provider. In a real deploy these would be backed by a
 # database and Stripe; here they are in-memory and deterministic.
@@ -106,13 +106,10 @@ def checkout(body: CheckoutRequest) -> dict:
 @app.post("/api/checkout/{session_id}/fulfill")
 def fulfill(session_id: str) -> dict:
     try:
-        PROVIDER.fulfill(LEDGER, session_id)
+        acct = PROVIDER.fulfill(LEDGER, session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    # session_id encodes account; reflect updated state by scanning the ledger.
-    # The mock provider already applied the grant; find the most-recent account.
-    last = LEDGER.log[-1]["account"] if LEDGER.log else None
-    return {"fulfilled": True, "account": _account_view(last) if last else None}
+    return {"fulfilled": True, "account": _account_view(acct.id)}
 
 
 def _count_pages(data: bytes) -> int:
@@ -132,7 +129,12 @@ async def convert(
     account_id: str = Form("anon"),
     fmt: str = Form("xlsx"),
     currency: str = Form("USD"),
+    preview: bool = Form(False),
 ) -> Response:
+    """Metered conversion. With ``preview`` set (and a binary ``fmt``), the
+    response is JSON carrying both the parsed rows *and* the file
+    base64-inline, so a UI can show the preview table and offer the download
+    from one call — charging the account once instead of twice."""
     fmt = (fmt or "xlsx").lower()
     if fmt not in {"xlsx", "csv", "json"}:
         raise HTTPException(status_code=400, detail="fmt must be xlsx|csv|json")
@@ -189,6 +191,18 @@ async def convert(
         media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ext = "xlsx"
 
+    if preview:
+        return JSONResponse(
+            content={
+                "transactions": [t.to_dict() for t in txns],
+                "summary": summary,
+                "charge": charge,
+                "file_b64": base64.b64encode(body).decode("ascii"),
+                "filename": f"statement.{ext}",
+                "media_type": media,
+            }
+        )
+
     headers = {
         "Content-Disposition": f'attachment; filename="statement.{ext}"',
         "X-Transaction-Count": str(summary["count"]),
@@ -198,5 +212,5 @@ async def convert(
 
 
 def create_app() -> FastAPI:
-    """Factory for ASGI servers (``uvicorn statement_to_excel.api:create_app``)."""
+    """Factory for ASGI servers (``uvicorn --factory statement_to_excel.api:create_app``)."""
     return app
