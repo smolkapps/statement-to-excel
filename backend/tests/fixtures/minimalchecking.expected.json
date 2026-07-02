@@ -10,26 +10,26 @@
   {
     "date": "2024-03-07",
     "description": "GROCERY OUTLET produce dept downtown",
-    "amount": "58.40",
+    "amount": "-58.40",
     "balance": "3541.60",
     "currency": "USD",
-    "type": "credit"
+    "type": "debit"
   },
   {
     "date": "2024-03-14",
     "description": "ELECTRIC UTILITY AUTOPAY",
-    "amount": "120.00",
+    "amount": "-120.00",
     "balance": "3421.60",
     "currency": "USD",
-    "type": "credit"
+    "type": "debit"
   },
   {
     "date": "2024-03-22",
     "description": "ATM WITHDRAWAL",
-    "amount": "200.00",
+    "amount": "-200.00",
     "balance": "3221.60",
     "currency": "USD",
-    "type": "credit"
+    "type": "debit"
   },
   {
     "date": "2024-03-29",

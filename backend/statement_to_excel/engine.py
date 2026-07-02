@@ -239,6 +239,30 @@ _AMOUNT_TOKEN_RE = re.compile(
 )
 
 
+def _apply_balance_delta_sign(
+    amount: Decimal, balance: Optional[Decimal], prev_balance: Optional[Decimal]
+) -> Decimal:
+    """Re-sign ``amount`` from the running-balance movement, when we can see it.
+
+    Borderless statements list amounts as bare, unsigned trailing numbers, so a
+    withdrawal and a deposit are indistinguishable from the amount token alone —
+    the naive parse types every row a credit. When a row carries a running
+    balance *and* we know the previous row's balance, the movement is
+    authoritative: a balance that dropped is money out (debit => negative), one
+    that rose is money in (credit => positive). We override the naive sign to
+    match. If the balance is flat or either balance is missing we leave the
+    amount as parsed.
+    """
+    if balance is None or prev_balance is None:
+        return amount
+    delta = balance - prev_balance
+    if delta < 0:
+        return -abs(amount)
+    if delta > 0:
+        return abs(amount)
+    return amount
+
+
 def _from_lines(
     lines: Sequence[str],
     *,
@@ -247,6 +271,7 @@ def _from_lines(
     default_year: Optional[int],
 ) -> List[Transaction]:
     out: List[Transaction] = []
+    prev_balance: Optional[Decimal] = None
     for raw in lines:
         line = raw.rstrip()
         if not line.strip():
@@ -280,6 +305,13 @@ def _from_lines(
         amount = parse_amount(amount_str)
         if amount is None:
             continue
+
+        # Borderless rows have no explicit debit/credit column, so infer the
+        # sign from how the running balance moved rather than trusting the bare
+        # (always-positive) amount token.
+        amount = _apply_balance_delta_sign(amount, balance, prev_balance)
+        if balance is not None:
+            prev_balance = balance
 
         desc = _strip_trailing_numbers(rest, n_strip)
         out.append(

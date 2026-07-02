@@ -50,6 +50,53 @@ def test_minimalchecking_field_accuracy(fixtures_dir):
     assert grocery and "produce dept" in grocery[0].description
 
 
+def test_minimalchecking_balance_delta_signs(fixtures_dir):
+    """Borderless rows (no debit/credit column) get their sign from the running
+    balance: a drop is a debit, a rise a credit — even though the amount token
+    is written unsigned. Regression guard for the naive "everything is a credit"
+    bug."""
+    txns = convert_pdf(fixtures_dir / "minimalchecking.pdf")
+    by_date = {t.date: t for t in txns}
+
+    # GROCERY OUTLET drops 3600.00 -> 3541.60, so it must be a debit.
+    grocery = by_date["2024-03-07"]
+    assert grocery.amount == Decimal("-58.40")
+    assert grocery.type == "debit"
+    # ATM WITHDRAWAL and the utility autopay likewise decrease the balance.
+    assert by_date["2024-03-14"].type == "debit"
+    assert by_date["2024-03-22"].amount == Decimal("-200.00")
+    # DIRECT DEPOSIT and INTEREST raise the balance -> credits.
+    assert by_date["2024-03-03"].type == "credit"
+    assert by_date["2024-03-29"].type == "credit"
+
+    # With the signs fixed, summarize() totals reconcile with the real cashflow.
+    real = [t for t in txns if t.date in {
+        "2024-03-03", "2024-03-07", "2024-03-14", "2024-03-22", "2024-03-29",
+    }]
+    s = summarize(real)
+    assert s.total_credit == Decimal("2101.25")  # 2100.00 + 1.25
+    assert s.total_debit == Decimal("378.40")  # 58.40 + 120.00 + 200.00
+    assert s.net == Decimal("1722.85")
+
+
+def test_balance_delta_infers_debit_on_borderless_line():
+    """A single balance-decreasing borderless row is typed a debit, not the
+    naive credit the unsigned amount token would otherwise produce."""
+    txns = convert_text(
+        lines=[
+            "01/05/2024 OPENING DEPOSIT 500.00 500.00",
+            "01/09/2024 HARDWARE STORE 30.00 470.00",
+        ],
+    )
+    hardware = next(t for t in txns if t.date == "2024-01-09")
+    assert hardware.amount == Decimal("-30.00")
+    assert hardware.type == "debit"
+    s = summarize(txns)
+    assert s.total_debit == Decimal("30.00")
+    assert s.total_credit == Decimal("500.00")
+    assert s.net == Decimal("470.00")
+
+
 def test_scanned_pdf_raises(fixtures_dir):
     with pytest.raises(ConversionError):
         convert_pdf(fixtures_dir / "scanned_empty.pdf")
