@@ -231,6 +231,9 @@ _LEADING_DATE_RE = re.compile(
     r"|\d{1,2}\s+[A-Za-z]{3,9}\.?(?:\s+\d{4})?"  # 5 Jan 2024
     r")\s+(.*\S)\s*$"
 )
+# A dated "OPENING/BEGINNING BALANCE" line carrying a single number states the
+# starting balance, not a transaction. We use it to seed the running balance.
+_BALANCE_SEED_RE = re.compile(r"\b(?:opening|beginning)\b.*\bbalance\b", re.IGNORECASE)
 # One amount token (currency/sign/parens aware) used to peel trailing numbers.
 _AMOUNT_TOKEN_RE = re.compile(
     r"(?:[$£€¥₩]|R\$|HK\$|US\$)?\s*"
@@ -242,20 +245,32 @@ _AMOUNT_TOKEN_RE = re.compile(
 def _apply_balance_delta_sign(
     amount: Decimal, balance: Optional[Decimal], prev_balance: Optional[Decimal]
 ) -> Decimal:
-    """Re-sign ``amount`` from the running-balance movement, when we can see it.
+    """Re-sign ``amount`` from the running-balance movement, when we can trust it.
 
     Borderless statements list amounts as bare, unsigned trailing numbers, so a
     withdrawal and a deposit are indistinguishable from the amount token alone —
     the naive parse types every row a credit. When a row carries a running
-    balance *and* we know the previous row's balance, the movement is
+    balance *and* we know the previous row's balance, the movement can be
     authoritative: a balance that dropped is money out (debit => negative), one
-    that rose is money in (credit => positive). We override the naive sign to
-    match. If the balance is flat or either balance is missing we leave the
-    amount as parsed.
+    that rose is money in (credit => positive).
+
+    But the movement is only trustworthy when its magnitude actually matches this
+    row's amount (within a cent). A mismatch means the balance chain is broken —
+    a preceding row carried no balance, so ``prev_balance`` is stale and this
+    delta spans *two* transactions — or the statement is newest-first, where the
+    delta reflects a neighbouring row rather than this one. Re-signing on a bogus
+    delta would silently flip an explicitly-signed amount (parens, trailing DR,
+    leading minus). So when the magnitudes disagree we decline and keep the
+    parsed sign. If the balance is flat or either balance is missing we likewise
+    leave the amount as parsed.
     """
     if balance is None or prev_balance is None:
         return amount
     delta = balance - prev_balance
+    # Only trust the movement when |delta| ~= |amount|; otherwise the chain is
+    # broken/stale (or reverse-chronological) and the parsed sign is safer.
+    if abs(abs(delta) - abs(amount)) > Decimal("0.01"):
+        return amount
     if delta < 0:
         return -abs(amount)
     if delta > 0:
@@ -302,6 +317,18 @@ def _from_lines(
         else:
             amount_str, balance = amounts[-1], None
             n_strip = 1
+
+        desc = _strip_trailing_numbers(rest, n_strip)
+
+        # A dated "OPENING/BEGINNING BALANCE" line carrying a single number is the
+        # starting balance, not a transaction: seed the running balance from it
+        # (so the first real row's sign can be inferred) and emit nothing.
+        if n_strip == 1 and _BALANCE_SEED_RE.search(desc):
+            seed = parse_amount(amount_str)
+            if seed is not None:
+                prev_balance = seed
+                continue
+
         amount = parse_amount(amount_str)
         if amount is None:
             continue
@@ -312,8 +339,6 @@ def _from_lines(
         amount = _apply_balance_delta_sign(amount, balance, prev_balance)
         if balance is not None:
             prev_balance = balance
-
-        desc = _strip_trailing_numbers(rest, n_strip)
         out.append(
             Transaction(
                 date=iso,

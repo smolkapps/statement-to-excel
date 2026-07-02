@@ -67,13 +67,15 @@ def test_minimalchecking_balance_delta_signs(fixtures_dir):
     assert by_date["2024-03-22"].amount == Decimal("-200.00")
     # DIRECT DEPOSIT and INTEREST raise the balance -> credits.
     assert by_date["2024-03-03"].type == "credit"
+    assert by_date["2024-03-03"].amount == Decimal("2100.00")
     assert by_date["2024-03-29"].type == "credit"
 
-    # With the signs fixed, summarize() totals reconcile with the real cashflow.
-    real = [t for t in txns if t.date in {
-        "2024-03-03", "2024-03-07", "2024-03-14", "2024-03-22", "2024-03-29",
-    }]
-    s = summarize(real)
+    # The dated single-number "OPENING BALANCE" line seeds the running balance
+    # rather than becoming a phantom +1500 credit, so the FULL unfiltered
+    # summarize() totals reconcile with the real cashflow — no date whitelist.
+    assert "2024-03-01" not in by_date
+    assert len(txns) == 5
+    s = summarize(txns)
     assert s.total_credit == Decimal("2101.25")  # 2100.00 + 1.25
     assert s.total_debit == Decimal("378.40")  # 58.40 + 120.00 + 200.00
     assert s.net == Decimal("1722.85")
@@ -95,6 +97,45 @@ def test_balance_delta_infers_debit_on_borderless_line():
     assert s.total_debit == Decimal("30.00")
     assert s.total_credit == Decimal("500.00")
     assert s.net == Decimal("470.00")
+
+
+def test_stale_balance_chain_keeps_explicit_sign():
+    """A balance-less row leaves prev_balance stale, so the next row's delta
+    spans two transactions and no longer matches that row's amount. The
+    magnitude guard then declines to re-sign and the explicitly-parsed sign
+    (parentheses => debit) survives instead of being flipped by the bogus
+    delta direction."""
+    txns = convert_text(
+        lines=[
+            "01/05/2024 OPENING DEPOSIT 500.00 500.00",
+            "01/07/2024 MOBILE REFUND 20.00",  # no balance -> prev_balance stays 500
+            "01/09/2024 CARD PURCHASE (5.00) 515.00",  # explicit debit
+        ],
+    )
+    purchase = next(t for t in txns if t.date == "2024-01-09")
+    # delta = 515 - 500 = +15 (spans the balance-less refund), which does NOT
+    # match |amount| = 5, so the naive override that would flip this to +5.00
+    # credit is declined and the parsed -5.00 debit is kept.
+    assert purchase.amount == Decimal("-5.00")
+    assert purchase.type == "debit"
+
+
+def test_newest_first_statement_declines_to_resign():
+    """On a reverse-chronological (newest-first) statement the delta between
+    adjacent rows reflects a *neighbouring* row's amount, not the current one,
+    so it won't match this row's magnitude. The guard declines rather than
+    flipping a deposit into a bogus debit."""
+    txns = convert_text(
+        lines=[
+            "03/10/2024 SECOND DEPOSIT 50.00 1050.00",
+            "03/05/2024 FIRST DEPOSIT 900.00 1000.00",
+        ],
+    )
+    first = next(t for t in txns if t.date == "2024-03-05")
+    # delta = 1000 - 1050 = -50 would naively flip this to -900.00 debit; but
+    # |delta| = 50 != |amount| = 900, so the parsed +900.00 credit is kept.
+    assert first.amount == Decimal("900.00")
+    assert first.type == "credit"
 
 
 def test_scanned_pdf_raises(fixtures_dir):
