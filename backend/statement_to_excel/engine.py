@@ -231,6 +231,22 @@ _LEADING_DATE_RE = re.compile(
     r"|\d{1,2}\s+[A-Za-z]{3,9}\.?(?:\s+\d{4})?"  # 5 Jan 2024
     r")\s+(.*\S)\s*$"
 )
+# A dated balance-seed line carrying a single number states the STARTING balance,
+# not a transaction — we use it to seed the running balance. This must be an
+# ANCHORED, whole-description match: an unanchored substring test would also fire
+# on real transactions that merely mention these words (e.g. "TRANSFER TO OPENING
+# SAVINGS BALANCE 200.00"), silently dropping them from the output and poisoning
+# the running balance. Covers the common seed labels across US / UK / AU / card
+# statements: "opening/beginning/previous/prior balance" and "balance
+# brought/carried forward" (and the "balance b/f" shorthand).
+_BALANCE_SEED_RE = re.compile(
+    r"^(?:"
+    r"(?:opening|beginning|previous|prior)\s+balance"
+    r"|balance\s+(?:brought|carried)\s+forward"
+    r"|balance\s+b\s*/?\s*f"
+    r")$",
+    re.IGNORECASE,
+)
 # One amount token (currency/sign/parens aware) used to peel trailing numbers.
 _AMOUNT_TOKEN_RE = re.compile(
     r"(?:[$£€¥₩]|R\$|HK\$|US\$)?\s*"
@@ -239,14 +255,64 @@ _AMOUNT_TOKEN_RE = re.compile(
 )
 
 
-def _from_lines(
+def _sign_from_delta(
+    amount: Decimal, anchor: Optional[Decimal], balance: Optional[Decimal]
+) -> Decimal:
+    """Sign ``amount`` from a running-balance movement, when it is trustworthy.
+
+    ``anchor`` is the balance this row moved *from*; ``balance`` is the balance it
+    moved *to*. A balance that dropped is money out (debit => negative), one that
+    rose is money in (credit => positive). The movement is trusted only when its
+    magnitude matches this row's amount within a cent — a mismatch means the
+    balance chain is broken/stale (an intervening row carried no balance, so the
+    delta spans two transactions) and the parsed sign is safer. Re-signing on a
+    bogus delta would silently flip an explicitly-signed amount (parens, trailing
+    DR, leading minus); when either balance is missing or the magnitudes disagree
+    we decline and keep the parsed sign.
+    """
+    if balance is None or anchor is None:
+        return amount
+    delta = balance - anchor
+    if abs(abs(delta) - abs(amount)) > Decimal("0.01"):
+        return amount
+    if delta < 0:
+        return -abs(amount)
+    if delta > 0:
+        return abs(amount)
+    return amount
+
+
+@dataclass
+class _Row:
+    """One parsed borderless line, pre-sign-assignment.
+
+    ``is_seed`` marks a starting-balance line (e.g. "OPENING BALANCE"): it is not
+    emitted as a transaction but its ``balance`` anchors the running chain.
+    """
+
+    iso: str
+    desc: str
+    amount: Decimal
+    balance: Optional[Decimal]
+    is_seed: bool
+
+
+def _parse_rows(
     lines: Sequence[str],
     *,
-    currency: str,
     dayfirst: bool,
     default_year: Optional[int],
-) -> List[Transaction]:
-    out: List[Transaction] = []
+) -> List[_Row]:
+    """Parse borderless lines into :class:`_Row` records (no sign inference yet).
+
+    Continuation lines (no leading date, no amount) fold into the previous
+    *transaction* row's description, matching the single-pass scanner's memo
+    behaviour. Seed lines are kept in sequence so they can anchor the chain from
+    either side (a trailing opening balance is the anchor for the oldest row on a
+    newest-first statement).
+    """
+    rows: List[_Row] = []
+    last_txn: Optional[_Row] = None
     for raw in lines:
         line = raw.rstrip()
         if not line.strip():
@@ -254,10 +320,10 @@ def _from_lines(
         m = _LEADING_DATE_RE.match(line)
         if not m:
             # Continuation line: fold into the previous transaction's memo.
-            if out and not _AMOUNT_TOKEN_RE.search(line):
+            if last_txn is not None and not _AMOUNT_TOKEN_RE.search(line):
                 extra = line.strip()
                 if extra:
-                    out[-1].description = (out[-1].description + " " + extra).strip()
+                    last_txn.desc = (last_txn.desc + " " + extra).strip()
             continue
 
         date_tok, rest = m.group(1), m.group(2)
@@ -277,17 +343,138 @@ def _from_lines(
         else:
             amount_str, balance = amounts[-1], None
             n_strip = 1
+
+        desc = _strip_trailing_numbers(rest, n_strip)
+
+        # A dated balance-seed line carrying a single number is the starting
+        # balance, not a transaction. Matched ANCHORED against the whole stripped
+        # description so a real transaction that merely mentions these words
+        # (e.g. "TRANSFER TO OPENING SAVINGS BALANCE") is not swallowed.
+        if n_strip == 1 and _BALANCE_SEED_RE.match(desc.strip()):
+            seed = parse_amount(amount_str)
+            if seed is not None:
+                rows.append(
+                    _Row(iso=iso, desc=desc, amount=seed, balance=seed, is_seed=True)
+                )
+                continue
+
         amount = parse_amount(amount_str)
         if amount is None:
             continue
+        row = _Row(iso=iso, desc=desc, amount=amount, balance=balance, is_seed=False)
+        rows.append(row)
+        last_txn = row
+    return rows
 
-        desc = _strip_trailing_numbers(rest, n_strip)
+
+def _statement_direction(rows: Sequence[_Row]) -> str:
+    """Return ``"descending"``, ``"ascending"`` or ``"mixed"`` for the txn dates.
+
+    Balance-delta inference is direction-sensitive: on an oldest-first statement a
+    row's balance is the *previous* row's balance moved by *this* row's amount; on
+    a newest-first statement it is the *next* (older) row's balance instead. We
+    classify from the transaction rows' ISO dates (which sort lexicographically),
+    ignoring seed lines. A run is "descending" when it never increases and drops
+    at least once, "ascending" when it never decreases and rises at least once;
+    same-date ties are tolerated on both sides (real statements routinely have
+    several transactions on one day) so a single tie does not misclassify the
+    whole statement. Anything genuinely non-monotonic is "mixed" and handled with
+    the conservative oldest-first path.
+    """
+    isos = [r.iso for r in rows if not r.is_seed]
+    if len(isos) < 2:
+        return "ascending"
+    pairs = list(zip(isos, isos[1:]))
+    never_up = all(a >= b for a, b in pairs)
+    never_down = all(a <= b for a, b in pairs)
+    if never_up and any(a > b for a, b in pairs):
+        return "descending"
+    if never_down and any(a < b for a, b in pairs):
+        return "ascending"
+    return "mixed"
+
+
+def _from_lines(
+    lines: Sequence[str],
+    *,
+    currency: str,
+    dayfirst: bool,
+    default_year: Optional[int],
+) -> List[Transaction]:
+    rows = _parse_rows(lines, dayfirst=dayfirst, default_year=default_year)
+    direction = _statement_direction(rows)
+
+    out: List[Transaction] = []
+    if direction == "descending":
+        # Newest-first: each row's balance = the balance it moved *from* moved by
+        # THIS row's amount, so sign from (balance - anchor), where the anchor is
+        # the next (older) balance in the SAME continuous chain. Getting the anchor
+        # right is the whole game:
+        #
+        # * It must be the IMMEDIATELY following record, never the next non-empty
+        #   one. Skipping a balance-less row would let the delta span two
+        #   transactions and, on a magnitude coincidence, confidently mis-sign the
+        #   row (even flip an explicit paren debit). A balance-less neighbour is a
+        #   chain break -> no anchor -> decline (keep parsed sign).
+        #
+        # * A SEED line is a period boundary, not a running balance, so it may
+        #   anchor the row above it ONLY when it is the statement's opening balance
+        #   at the very tail. A seed sitting BETWEEN transactions (e.g. a
+        #   "PREVIOUS BALANCE" from a concatenated newer period) opens a different
+        #   period; anchoring the older-period row on it would compare across the
+        #   boundary and can confidently flip a real credit to a debit. So a
+        #   non-final seed also breaks the chain.
+        #
+        # Adjacent transaction rows (the equal-magnitude repro) still resolve,
+        # because this reads each row's own movement rather than a neighbour's.
+        last_idx = len(rows) - 1
+        for i, row in enumerate(rows):
+            if row.is_seed:
+                continue
+            nxt = rows[i + 1] if i + 1 < len(rows) else None
+            if nxt is None or (nxt.is_seed and i + 1 != last_idx):
+                anchor: Optional[Decimal] = None  # chain break: decline
+            else:
+                anchor = nxt.balance
+            amount = _sign_from_delta(row.amount, anchor, row.balance)
+            out.append(
+                Transaction(
+                    date=row.iso,
+                    description=row.desc,
+                    amount=amount,
+                    balance=row.balance,
+                    currency=currency,
+                )
+            )
+        return out
+
+    # Oldest-first (or mixed/ambiguous, handled conservatively): sign from the
+    # PREVIOUS balance. ``anchor`` is the last balance we trust; ``chain_broken``
+    # guards the coincidence where a balance-less row leaves the anchor stale and
+    # the next row's spanning delta happens to match |amount| — in that state the
+    # next balanced row may only RE-ANCHOR, never re-sign.
+    anchor: Optional[Decimal] = None
+    chain_broken = False
+    for row in rows:
+        if row.is_seed:
+            anchor = row.balance
+            chain_broken = False
+            continue
+        if chain_broken:
+            amount = row.amount  # do not re-sign across a broken chain
+        else:
+            amount = _sign_from_delta(row.amount, anchor, row.balance)
+        if row.balance is not None:
+            anchor = row.balance
+            chain_broken = False
+        else:
+            chain_broken = True
         out.append(
             Transaction(
-                date=iso,
-                description=desc,
+                date=row.iso,
+                description=row.desc,
                 amount=amount,
-                balance=balance,
+                balance=row.balance,
                 currency=currency,
             )
         )

@@ -223,6 +223,8 @@ def make_minimalchecking():
 
     # NOTE: single trailing number on the opening line => treated as amount,
     # which is not a real transaction; expected starts at the first 2-number row.
+    # Signs come from the running-balance movement (this borderless layout has no
+    # explicit debit/credit column): a balance drop is a debit, a rise a credit.
     expected = [
         {
             "date": "2024-03-03",
@@ -235,26 +237,26 @@ def make_minimalchecking():
         {
             "date": "2024-03-07",
             "description": "GROCERY OUTLET produce dept downtown",
-            "amount": _dec("58.40"),
+            "amount": _dec("-58.40"),
             "balance": _dec("3541.60"),
             "currency": "USD",
-            "type": "credit",
+            "type": "debit",
         },
         {
             "date": "2024-03-14",
             "description": "ELECTRIC UTILITY AUTOPAY",
-            "amount": _dec("120.00"),
+            "amount": _dec("-120.00"),
             "balance": _dec("3421.60"),
             "currency": "USD",
-            "type": "credit",
+            "type": "debit",
         },
         {
             "date": "2024-03-22",
             "description": "ATM WITHDRAWAL",
-            "amount": _dec("200.00"),
+            "amount": _dec("-200.00"),
             "balance": _dec("3221.60"),
             "currency": "USD",
-            "type": "credit",
+            "type": "debit",
         },
         {
             "date": "2024-03-29",
