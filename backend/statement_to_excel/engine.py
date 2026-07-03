@@ -406,23 +406,36 @@ def _from_lines(
 
     out: List[Transaction] = []
     if direction == "descending":
-        # Newest-first: each row's balance = the NEXT (older) row's balance moved
-        # by THIS row's amount, so sign from (balance - next_balance). The anchor
-        # must be the IMMEDIATELY following record's balance — NOT the next
-        # non-empty one. Skipping over a balance-less row would let the delta span
-        # two transactions; if that spanning delta coincidentally matched |amount|
-        # it would confidently mis-sign the row (even flipping an explicit paren
-        # debit). So a gap breaks the chain here exactly as it does on the
-        # oldest-first path: when the immediate neighbour has no balance,
-        # ``anchor`` is None and ``_sign_from_delta`` declines, keeping the parsed
-        # sign. Adjacent rows (the equal-magnitude repro) still resolve, because
-        # forward-delta read a neighbour's movement whereas this reads each row's
-        # own movement — equal magnitudes no longer collide.
+        # Newest-first: each row's balance = the balance it moved *from* moved by
+        # THIS row's amount, so sign from (balance - anchor), where the anchor is
+        # the next (older) balance in the SAME continuous chain. Getting the anchor
+        # right is the whole game:
+        #
+        # * It must be the IMMEDIATELY following record, never the next non-empty
+        #   one. Skipping a balance-less row would let the delta span two
+        #   transactions and, on a magnitude coincidence, confidently mis-sign the
+        #   row (even flip an explicit paren debit). A balance-less neighbour is a
+        #   chain break -> no anchor -> decline (keep parsed sign).
+        #
+        # * A SEED line is a period boundary, not a running balance, so it may
+        #   anchor the row above it ONLY when it is the statement's opening balance
+        #   at the very tail. A seed sitting BETWEEN transactions (e.g. a
+        #   "PREVIOUS BALANCE" from a concatenated newer period) opens a different
+        #   period; anchoring the older-period row on it would compare across the
+        #   boundary and can confidently flip a real credit to a debit. So a
+        #   non-final seed also breaks the chain.
+        #
+        # Adjacent transaction rows (the equal-magnitude repro) still resolve,
+        # because this reads each row's own movement rather than a neighbour's.
+        last_idx = len(rows) - 1
         for i, row in enumerate(rows):
             if row.is_seed:
                 continue
             nxt = rows[i + 1] if i + 1 < len(rows) else None
-            anchor = nxt.balance if nxt is not None else None
+            if nxt is None or (nxt.is_seed and i + 1 != last_idx):
+                anchor: Optional[Decimal] = None  # chain break: decline
+            else:
+                anchor = nxt.balance
             amount = _sign_from_delta(row.amount, anchor, row.balance)
             out.append(
                 Transaction(

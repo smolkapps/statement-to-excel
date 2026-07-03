@@ -327,6 +327,35 @@ def test_descending_gap_does_not_flip_explicit_paren_debit():
     assert purchase.type == "debit"
 
 
+def test_descending_midsequence_seed_is_not_a_false_anchor():
+    """HOLE 1 (regression on the fix itself, second variant). On a newest-first
+    statement a SEED line (e.g. a "PREVIOUS BALANCE" from a concatenated newer
+    statement period) can sit BETWEEN transactions. A seed is a period-opening
+    balance, not a running balance, so it must NOT anchor the row above it unless
+    it is the statement's opening balance at the very tail — otherwise the
+    older-period row is compared across the period boundary and a real credit is
+    confidently flipped to a debit. Here 03/20 REFUND is a real +200 credit, but
+    the mid-sequence PREVIOUS BALANCE 1400.00 would give delta 1200-1400 = -200 ==
+    |amount|, flipping it to a -200 debit. The boundary must break the chain so
+    the refund is not mis-signed as a debit."""
+    txns = convert_text(
+        lines=[
+            "03/20/2024 REFUND 200.00 1200.00",  # real credit
+            "03/15/2024 PREVIOUS BALANCE 1400.00",  # mid-sequence seed / boundary
+            "03/10/2024 OLD TXN 40.00 1360.00",
+            "03/05/2024 OPENING BALANCE 1400.00",
+        ],
+    )
+    by_date = {t.date: t for t in txns}
+    refund = by_date["2024-03-20"]
+    # The non-negotiable property: a real credit is not confidently flipped to a
+    # debit by a cross-boundary delta. The seed lines are not emitted as rows.
+    assert refund.type != "debit", refund
+    assert refund.amount == Decimal("200.00"), refund
+    assert "2024-03-15" not in by_date  # PREVIOUS BALANCE seed, not a txn
+    assert "2024-03-05" not in by_date  # OPENING BALANCE seed, not a txn
+
+
 def test_brought_forward_and_previous_balance_seed_the_chain():
     """HOLE 4. Scope gap: 'BALANCE BROUGHT FORWARD' and 'PREVIOUS BALANCE'
     (standard on UK / AU / card statements) are starting-balance seeds too. They
