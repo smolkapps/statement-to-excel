@@ -5,11 +5,11 @@ export function Header() {
   const { t, locale, setLocale } = useI18n();
   return (
     <header className="site-header">
-      <a href="#top" className="brand" aria-label="statement-to-excel home">
+      <a href="#top" className="brand" aria-label="Statement→Excel home">
         <span className="brand-mark" aria-hidden="true">
           ⇲
         </span>
-        <span className="brand-name">statement&#8203;-to-excel</span>
+        <span className="brand-name">Statement→Excel</span>
       </a>
       <nav className="nav" aria-label="Primary">
         <a href="#product">{t.nav_product}</a>
