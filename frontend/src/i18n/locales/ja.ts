@@ -12,14 +12,15 @@ export const ja: Translation = {
     "会計士・経理担当・財務チームへ。取引の手入力はもう不要です。明細PDFをドロップすれば、日付・摘要・金額・残高がそろった正確な表が手に入ります。",
   hero_cta: "明細を変換する",
   hero_secondary_cta: "料金を見る",
-  hero_trust: "ローカルで処理し、データは保存しません。金額は小数まで正確で、丸めません。",
+  hero_trust:
+    "テキスト形式のPDFのみ対応。スキャン画像にはOCRが必要です。金額は丸めず正確に扱います。",
 
   feature_accuracy_title: "概算ではなく、正確に",
   feature_accuracy_body:
     "金額は正確な小数として解析します。括弧、末尾のマイナス、DR/CR表記、桁区切りにも対応。借方・貸方の符号も正しく保持します。",
-  feature_private_title: "プライバシー重視の設計",
+  feature_private_title: "外部のAIは不要",
   feature_private_body:
-    "変換時に明細を第三者へ送信しません。広告なし、データの転売なし。データではなく、ツールに対してお支払いいただきます。",
+    "外部のAI APIに明細を送信せず、取引日、摘要、金額、残高を抽出します。",
   feature_formats_title: "Excel・CSV・JSON",
   feature_formats_body:
     "集計シート付きの整形済み.xlsx、取り込み用のCSV、独自処理向けのJSONを出力。お使いの会計ソフトもきっと喜びます。",

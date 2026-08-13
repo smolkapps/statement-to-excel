@@ -17,8 +17,9 @@ decimals (never rounded), debits and credits correctly signed.
 └─────────────────────┘      └──────────────────────┘      └────────────────────┘
 ```
 
-- **Runs offline.** The conversion path makes zero network calls and uses no API
-  keys. No ads, no data resale — you pay for the tool, not with your data.
+- **No external parsing service.** The parsing engine makes no outbound network
+  calls and uses no API keys. The hosted web UI uploads the selected PDF to this
+  app's backend; the CLI can run entirely on your machine.
 - **Business pricing, by design.** Monthly plans for steady volume **and**
   prepaid credit packs ($30–$400) for occasional use. 1 credit = 1 statement
   page. (No ads, no affiliate.)

@@ -12,14 +12,15 @@ export const en: Translation = {
     "Accountants, bookkeepers and finance teams: stop retyping transactions. Drop a statement PDF, get a tidy, exact spreadsheet with every date, description, amount and balance.",
   hero_cta: "Convert a statement",
   hero_secondary_cta: "See pricing",
-  hero_trust: "Processed locally. No data is stored. Exact decimals, never rounded.",
+  hero_trust:
+    "Text-based PDFs only; scanned statements need OCR. Exact decimals, never rounded.",
 
   feature_accuracy_title: "Exact, not approximate",
   feature_accuracy_body:
     "Amounts are parsed as precise decimals — parentheses, trailing minus, DR/CR markers and thousands separators all handled. Debits and credits keep their correct sign.",
-  feature_private_title: "Private by design",
+  feature_private_title: "No third-party AI required",
   feature_private_body:
-    "Conversion runs without sending your statement to any third party. No ads, no data resale — you pay for the tool, not with your data.",
+    "The converter extracts transaction dates, descriptions, amounts and balances without sending your statement to a third-party AI API.",
   feature_formats_title: "Excel, CSV or JSON",
   feature_formats_body:
     "Get a formatted .xlsx with a summary sheet, a plain CSV for imports, or JSON for your own pipeline. Your accounting software will thank you.",

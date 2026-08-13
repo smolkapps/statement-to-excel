@@ -12,14 +12,15 @@ export const zh: Translation = {
     "会计、记账与财务团队：不必再手工录入交易。上传一份对账单 PDF，即可得到整洁、精确的表格，包含每一笔的日期、摘要、金额和余额。",
   hero_cta: "转换对账单",
   hero_secondary_cta: "查看价格",
-  hero_trust: "本地处理，不保存任何数据。金额精确到小数，绝不四舍五入。",
+  hero_trust:
+    "仅支持文本型 PDF；扫描件需要先进行 OCR。金额保持精确，不做四舍五入。",
 
   feature_accuracy_title: "精确，而非近似",
   feature_accuracy_body:
     "金额按精确小数解析——括号、尾部负号、DR/CR 标记和千位分隔符均可处理。借方与贷方保留正确的正负号。",
-  feature_private_title: "隐私优先",
+  feature_private_title: "无需第三方 AI",
   feature_private_body:
-    "转换过程不会把您的对账单发送给任何第三方。没有广告，不转售数据——您为工具付费，而不是用数据付费。",
+    "转换器无需将对账单发送给第三方 AI API，即可提取交易日期、说明、金额和余额。",
   feature_formats_title: "Excel、CSV 或 JSON",
   feature_formats_body:
     "可获得带汇总表的格式化 .xlsx、便于导入的纯 CSV，或供您自有流程使用的 JSON。您的会计软件会更省心。",

@@ -12,14 +12,15 @@ export const it: Translation = {
     "Commercialisti, contabili e team finanziari: basta ridigitare le transazioni. Trascina un PDF dell'estratto conto e ottieni un foglio di calcolo ordinato e preciso con ogni data, descrizione, importo e saldo.",
   hero_cta: "Converti un estratto conto",
   hero_secondary_cta: "Vedi i prezzi",
-  hero_trust: "Elaborato in locale. Nessun dato viene salvato. Decimali esatti, mai arrotondati.",
+  hero_trust:
+    "Solo PDF con testo; gli estratti scansionati richiedono l'OCR. Decimali esatti, mai arrotondati.",
 
   feature_accuracy_title: "Esatto, non approssimato",
   feature_accuracy_body:
     "Gli importi vengono interpretati come decimali esatti: parentesi, segno meno finale, indicatori DR/CR e separatori delle migliaia, tutto gestito. Addebiti e accrediti mantengono il segno corretto.",
-  feature_private_title: "Privato per progettazione",
+  feature_private_title: "Non richiede IA di terze parti",
   feature_private_body:
-    "La conversione avviene senza inviare il tuo estratto conto a terzi. Niente pubblicità né rivendita di dati: paghi per lo strumento, non con i tuoi dati.",
+    "Il convertitore estrae date, descrizioni, importi e saldi senza inviare l'estratto conto a un'API di IA di terze parti.",
   feature_formats_title: "Excel, CSV o JSON",
   feature_formats_body:
     "Ottieni un .xlsx formattato con un foglio di riepilogo, un CSV semplice per le importazioni o JSON per il tuo flusso di lavoro. Il tuo software contabile ti ringrazierà.",

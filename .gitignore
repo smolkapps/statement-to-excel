@@ -16,6 +16,7 @@ dist/
 node_modules/
 frontend/dist/
 frontend/.vite/
+*.tsbuildinfo
 *.local
 
 # Env / secrets
