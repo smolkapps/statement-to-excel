@@ -2,8 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { useI18n } from "../i18n/I18nContext";
 import {
   ApiError,
-  convertToBlob,
-  convertToJson,
+  convertStatement,
   type ConvertJsonResult,
   type OutputFormat,
 } from "../lib/api";
@@ -54,15 +53,16 @@ export function Converter({ accountId, onCharged }: Props) {
     setError(null);
     setResult(null);
     try {
-      // Always fetch JSON for the preview table.
-      const json = await convertToJson(file, { accountId, currency });
-      setResult(json);
-      onCharged?.(1);
-      // For binary formats, also fetch + download the file.
-      if (fmt !== "json") {
-        const blob = await convertToBlob(file, { accountId, fmt, currency });
-        triggerDownload(blob, `statement.${fmt}`);
-      }
+      // ONE metered call returns the preview rows and (for binary formats)
+      // the file itself, so a conversion is charged exactly once.
+      const { result, blob, filename } = await convertStatement(file, {
+        accountId,
+        fmt,
+        currency,
+      });
+      setResult(result);
+      onCharged?.(result.charge?.pages ?? 1);
+      if (blob) triggerDownload(blob, filename);
     } catch (err) {
       if (err instanceof ApiError && err.kind === "insufficient") {
         setError(t.convert_error_insufficient);

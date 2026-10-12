@@ -23,9 +23,18 @@ export interface Summary {
   end_date: string | null;
 }
 
+/** The ledger entry the backend returns for a successful metered conversion. */
+export interface ChargeInfo {
+  pages: number;
+  from_included: number;
+  from_credits: number;
+  credits_after: number;
+}
+
 export interface ConvertJsonResult {
   transactions: TransactionRow[];
   summary: Summary;
+  charge?: ChargeInfo;
 }
 
 export type OutputFormat = "xlsx" | "csv" | "json";
@@ -67,43 +76,56 @@ export class ApiError extends Error {
   }
 }
 
-/** Convert and get inline JSON (used to render the preview table). */
-export async function convertToJson(
-  file: File | Blob,
-  opts: { accountId: string; currency: string },
-): Promise<ConvertJsonResult> {
-  const form = buildConvertForm(file, { ...opts, fmt: "json" });
-  const res = await fetch(apiUrl("/api/convert"), { method: "POST", body: form });
+async function throwApiError(res: Response): Promise<never> {
+  const body = await res.json().catch(() => ({}) as { detail?: string });
   if (res.status === 402) {
-    const body = await res.json().catch(() => ({}));
     throw new ApiError("insufficient", body.detail ?? "insufficient credits");
   }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError("parse", body.detail ?? `request failed (${res.status})`);
-  }
-  return (await res.json()) as ConvertJsonResult;
+  throw new ApiError("parse", body.detail ?? `request failed (${res.status})`);
 }
 
-/** Convert and get a downloadable Blob (xlsx/csv). */
-export async function convertToBlob(
+/** Decode a base64 payload into a Blob (for the inline preview download). */
+export function base64ToBlob(b64: string, mediaType: string): Blob {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mediaType });
+}
+
+interface ConvertPreviewResponse extends ConvertJsonResult {
+  file_b64?: string;
+  filename?: string;
+  media_type?: string;
+}
+
+export interface ConvertOutcome {
+  result: ConvertJsonResult;
+  /** The downloadable file for binary formats; null when fmt is "json". */
+  blob: Blob | null;
+  filename: string;
+}
+
+/**
+ * Convert a statement with ONE metered request: the response carries the rows
+ * for the preview table and, for binary formats (`preview` flag), the file
+ * itself base64-inline — so the account is charged once per conversion, not
+ * once for the preview plus once for the download.
+ */
+export async function convertStatement(
   file: File | Blob,
-  opts: { accountId: string; fmt: "xlsx" | "csv"; currency: string },
-): Promise<Blob> {
+  opts: { accountId: string; fmt: OutputFormat; currency: string },
+): Promise<ConvertOutcome> {
   const form = buildConvertForm(file, opts);
+  if (opts.fmt !== "json") form.append("preview", "1");
   const res = await fetch(apiUrl("/api/convert"), { method: "POST", body: form });
-  if (res.status === 402) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError("insufficient", body.detail ?? "insufficient credits");
-  }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new ApiError("parse", body.detail ?? `request failed (${res.status})`);
-  }
-  return await res.blob();
-}
-
-export async function getPricing(): Promise<unknown> {
-  const res = await fetch(apiUrl("/api/pricing"));
-  return res.json();
+  if (!res.ok) await throwApiError(res);
+  const body = (await res.json()) as ConvertPreviewResponse;
+  const blob = body.file_b64
+    ? base64ToBlob(body.file_b64, body.media_type ?? "application/octet-stream")
+    : null;
+  return {
+    result: body,
+    blob,
+    filename: body.filename ?? `statement.${opts.fmt}`,
+  };
 }

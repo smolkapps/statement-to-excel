@@ -4,6 +4,7 @@ These reset the in-memory ledger between tests so metering assertions are
 deterministic, and use the synthetic acmebank fixture as the uploaded PDF.
 """
 
+import base64
 import io
 
 import pytest
@@ -145,6 +146,27 @@ def test_checkout_then_fulfill_grants_credits(client):
     assert acct["credits"] == 50
 
 
+def test_checkout_then_fulfill_plan_reports_the_right_account(client):
+    # Seed an unrelated ledger entry first, so an implementation that guesses
+    # the account from the global charge log returns the wrong one.
+    other_sid = client.post(
+        "/api/checkout", json={"account_id": "other", "sku": "pack_50"}
+    ).json()["session_id"]
+    client.post(f"/api/checkout/{other_sid}/fulfill")
+
+    r = client.post("/api/checkout", json={"account_id": "upgrader", "sku": "business"})
+    assert r.status_code == 200
+    sid = r.json()["session_id"]
+    f = client.post(f"/api/checkout/{sid}/fulfill")
+    assert f.status_code == 200
+    acct = f.json()["account"]
+    assert acct is not None
+    assert acct["id"] == "upgrader"
+    assert acct["plan"] == "business"
+    # The grant is visible on the account resource too.
+    assert client.get("/api/account/upgrader").json()["plan"] == "business"
+
+
 def test_fulfill_unknown_session_404(client):
     r = client.post("/api/checkout/cs_mock_does_not_exist/fulfill")
     assert r.status_code == 404
@@ -169,3 +191,26 @@ def test_buying_credits_unblocks_conversion(client, pdf_bytes):
     )
     assert r.status_code == 200
     assert int(r.headers["x-credits-remaining"]) == 49
+
+
+def test_convert_preview_charges_once_and_inlines_the_file(client, pdf_bytes):
+    # One call serves both the UI preview table and the download -> one charge.
+    files = {"file": ("acmebank.pdf", io.BytesIO(pdf_bytes), "application/pdf")}
+    r = client.post(
+        "/api/convert",
+        files=files,
+        data={"account_id": "pv", "fmt": "xlsx", "preview": "1"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["transactions"]) == 5
+    assert body["summary"]["count"] == 5
+    assert body["charge"]["pages"] == 1
+    assert body["filename"] == "statement.xlsx"
+    assert body["media_type"].startswith("application/vnd.openxmlformats")
+    blob = base64.b64decode(body["file_b64"])
+    assert blob[:2] == b"PK"  # zip container == real xlsx bytes
+    # Exactly ONE page charged for the combined preview+download call.
+    acct = client.get("/api/account/pv").json()
+    assert acct["pages_used_this_cycle"] == 1
+    assert acct["included_remaining"] == 2

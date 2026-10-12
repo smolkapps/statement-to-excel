@@ -494,3 +494,35 @@ tbody tr:hover {
     gap: 12px;
   }
 }
+
+/* Keep all header controls reachable on narrow screens, including longer locales. */
+@media (max-width: 600px) {
+  .site-header {
+    flex-wrap: wrap;
+  }
+  .brand {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .brand-mark {
+    flex-shrink: 0;
+  }
+  .brand-name {
+    overflow-wrap: anywhere;
+  }
+  .site-header .nav {
+    order: 3;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    min-width: 0;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+  .site-header .nav a,
+  .locale-switcher,
+  .locale-switcher select {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+}

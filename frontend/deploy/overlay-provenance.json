@@ -1,0 +1,21 @@
+{
+  "base_source_sha": "3caacf267bc84ebcc75df6643693b8749f4e48de",
+  "icon_source": {
+    "path": "frontend/public at recorded source commit",
+    "commit": "3a825bb75b69432eb273a50f5650620c7c9a364c",
+    "matches_live": "/var/www/apps/statement-to-excel"
+  },
+  "privacy_copy_source": {
+    "commit": "cc19e2d362d4004b3162510e33e789767954f0e6",
+    "extension": "All five locales explicitly disclose PDF upload to server; no absolute retention promise"
+  },
+  "analytics": {
+    "source": "Existing live index and Ryan portfolio poller literal",
+    "script": "https://umami.smolkin.org/script.js",
+    "public_website_id": "0ee0e19b-b29b-4c98-b3f6-a92a43b4ba5a",
+    "policy": "Preserve existing single script; no new tracking destination"
+  },
+  "production_status": "Named frontend canary candidate; canonical integration pending and scheduled route held",
+  "backend_policy": "No conversion/account/payment/service changes",
+  "billing_evidence": "Live read-only API health reported billing=mock"
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "date": "2024-02-02",
+    "description": "Payment - Thank You",
+    "amount": "-500.00",
+    "balance": "1000.00",
+    "currency": "USD",
+    "type": "debit"
+  },
+  {
+    "date": "2024-02-04",
+    "description": "BLUE BOTTLE COFFEE",
+    "amount": "6.75",
+    "balance": "1006.75",
+    "currency": "USD",
+    "type": "credit"
+  },
+  {
+    "date": "2024-02-09",
+    "description": "DELTA AIR LINES",
+    "amount": "412.30",
+    "balance": "1419.05",
+    "currency": "USD",
+    "type": "credit"
+  },
+  {
+    "date": "2024-02-15",
+    "description": "STATEMENT CREDIT",
+    "amount": "-25.00",
+    "balance": "1394.05",
+    "currency": "USD",
+    "type": "debit"
+  },
+  {
+    "date": "2024-02-21",
+    "description": "APPLE.COM/BILL",
+    "amount": "9.99",
+    "balance": "1404.04",
+    "currency": "USD",
+    "type": "credit"
+  }
+]
