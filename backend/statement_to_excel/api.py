@@ -26,6 +26,7 @@ import io
 import os
 from typing import Annotated, Optional
 
+from anyio import CancelScope
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -284,9 +285,10 @@ async def convert(
             idempotency_key, metered, LEDGER,
         )
     finally:
-        # Starlette may spool larger multipart uploads to disk. Closing here
-        # releases memory and deletes the spill before any response is sent.
-        await file.close()
+        # Closing releases memory and deletes rejected or forced disk spills.
+        # Shield the worker-thread close so cancellation cannot skip cleanup.
+        with CancelScope(shield=True):
+            await file.close()
 
 
 def create_app() -> FastAPI:

@@ -77,8 +77,9 @@ Process accepted uploads and outputs in memory. This app sets Starlette's
 multipart spool threshold to **21 MiB**, above its **20 MiB** file limit, so
 accepted uploads never roll onto disk. Excel worksheet XML and the resulting
 workbook also stay in memory. Close uploads in a `finally` block immediately
-after processing, including parse, validation, quota and writer failures; any
-oversized rejected or forcibly spooled upload must be deleted. Tests verify
+after processing, including parse, validation, quota and writer failures.
+Shield cleanup from request cancellation; any oversized rejected or forcibly
+spooled upload must be deleted. Tests verify
 real 5 MiB multipart uploads in every format create no temporary file, the
 20 MiB boundary, and deletion of deliberately rolled files. Never log,
 persist, send to analytics or include in payment metadata PDF contents, filenames,

@@ -4,7 +4,9 @@ import asyncio
 import io
 import os
 import tempfile
+import threading
 
+import anyio
 import pytest
 from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
@@ -77,3 +79,62 @@ def test_real_multipart_spills_are_closed_and_deleted(monkeypatch, fixtures_dir,
     assert len(records) == 2
     assert all(spool._rolled and spool.closed for spool in records)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_cancelled_request_closes_real_disk_spool_after_worker_finishes(monkeypatch, fixtures_dir, tmp_path):
+    """Cancellation must not interrupt the asynchronous disk-file close."""
+    monkeypatch.setattr(api, "LEDGER", Ledger())
+    monkeypatch.setattr(api, "PROVIDER", StripeBillingProvider(secret_key="", webhook_secret=""))
+    entered = threading.Event()
+    release = threading.Event()
+    parsed = threading.Event()
+    request_finished = threading.Event()
+    original_parse = api.convert_pdf
+
+    def gated_parse(*args, **kwargs):
+        entered.set()
+        # A watchdog is teardown protection, not the correctness oracle.
+        assert release.wait(timeout=5), "test did not release the PDF worker"
+        try:
+            return original_parse(*args, **kwargs)
+        finally:
+            parsed.set()
+
+    monkeypatch.setattr(api, "convert_pdf", gated_parse)
+    spool = tempfile.SpooledTemporaryFile(max_size=1, mode="w+b", dir=tmp_path)
+    spool.write((fixtures_dir / "acmebank.pdf").read_bytes())
+    spool.rollover()
+    assert spool._rolled, "regression must exercise a real disk-backed upload"
+    fd = spool.fileno()
+    spool.seek(0)
+    upload = UploadFile(file=spool, filename="synthetic-cancelled.pdf")
+
+    async def convert_upload():
+        try:
+            await api.convert(file=upload, account_id="synthetic-cancelled", fmt="csv",
+                              currency="USD", preview=False, idempotency_key=None)
+        finally:
+            request_finished.set()
+
+    async def cancel_during_conversion():
+        with anyio.fail_after(10):
+            async with anyio.create_task_group() as requests:
+                try:
+                    requests.start_soon(convert_upload)
+                    assert await anyio.to_thread.run_sync(lambda: entered.wait(5)), "PDF worker was not reached"
+                    requests.cancel_scope.cancel()
+                finally:
+                    # The group waits for its worker and endpoint cleanup before
+                    # exit; release it on every failure path as well.
+                    release.set()
+
+    try:
+        anyio.run(cancel_during_conversion, backend="asyncio")
+        assert parsed.is_set() and request_finished.is_set()
+        assert spool.closed, "cancelled requests must close disk uploads after their worker finishes"
+        with pytest.raises(OSError):
+            os.fstat(fd)
+        assert list(tmp_path.iterdir()) == [], "no uploaded statement may remain on disk"
+    finally:
+        release.set()
+        spool.close()

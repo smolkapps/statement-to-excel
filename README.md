@@ -182,7 +182,8 @@ and deleted right after. Accepted uploads, converted rows and Excel worksheet
 XML/workbooks are processed in memory. The app's **21 MiB multipart spool
 threshold** exceeds its unchanged **20 MiB file limit**, so accepted PDFs never
 create temporary disk files. Uploads are closed immediately in all success and
-failure paths; oversized rejected or deliberately spooled files are deleted.
+failure paths, with cleanup shielded from request cancellation; oversized
+rejected or deliberately spooled files are deleted.
 Statement bytes and extracted rows are never persisted or sent to analytics.
 
 Production nginx must match `frontend/deploy/nginx.conf.example`: use
