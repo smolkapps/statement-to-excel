@@ -6,34 +6,41 @@ Endpoints
 ``GET  /api/pricing``                 plan + credit-pack catalog (shared w/ UI)
 ``GET  /api/account/{id}``            metering state for an account
 ``POST /api/account/{id}/quote``      cost of processing N pages (no charge)
-``POST /api/checkout``                start a (mock) purchase -> checkout url
-``POST /api/checkout/{sid}/fulfill``  complete the (mock) purchase -> grant
+``POST /api/checkout``                idempotent Stripe test Checkout
+``GET  /api/checkout/{sid}``          account-bound payment status
+``POST /api/stripe/webhook``          signed payment -> exactly-once entitlement
 ``POST /api/convert``                 multipart PDF upload -> metered conversion
 
-The conversion endpoint counts statement pages, *quotes* the charge, and only
-spends credits/allowance after a successful parse. With the default mock billing
-provider it needs no external services, so the test-suite drives the real ASGI
-app end-to-end via Starlette's TestClient.
+Conversion and output generation run locally in memory. Usage is charged only
+after successful output generation. Optional Idempotency-Key prevents repeat
+usage debits. Billing stores metadata only; test Checkout remains disabled until
+Stripe test credentials and signed webhooks are configured.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
+import os
+from typing import Annotated, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from . import __version__
-from .billing import InsufficientCredits, Ledger, PRICING, get_provider
+from .billing import (
+    BillingError, InsufficientCredits, PersistentLedger, PRICING,
+    apply_webhook, checkout_status, create_checkout, get_provider,
+)
 from .engine import ConversionError, convert_pdf, summarize
 from .writers import to_csv_bytes, to_xlsx_bytes
 
-# A process-wide ledger + provider. In a real deploy these would be backed by a
-# database and Stripe; here they are in-memory and deterministic.
-LEDGER = Ledger()
+# SQLite persists billing and metering metadata only. Uploads and converted
+# transaction rows must never enter the ledger or provider.
+LEDGER = PersistentLedger(os.getenv("STX_BILLING_DATABASE", "var/billing.sqlite3"))
 PROVIDER = get_provider()
 
 app = FastAPI(title="statement-to-excel", version=__version__)
@@ -66,6 +73,7 @@ def _account_view(account_id: str) -> dict:
         "included_pages": acct.plan.included_pages,
         "pages_used_this_cycle": acct.pages_used_this_cycle,
         "included_remaining": acct.included_remaining(),
+        "pro": acct.pro,
     }
 
 
@@ -96,20 +104,28 @@ def quote(account_id: str, body: QuoteRequest) -> dict:
 
 
 @app.post("/api/checkout")
-def checkout(body: CheckoutRequest) -> dict:
+def checkout(body: CheckoutRequest, idempotency_key: str = Header("")) -> dict:
     try:
-        return PROVIDER.create_checkout(body.account_id, body.sku)
-    except KeyError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        return create_checkout(LEDGER, PROVIDER, body.account_id, body.sku, idempotency_key)
+    except BillingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
-@app.post("/api/checkout/{session_id}/fulfill")
-def fulfill(session_id: str) -> dict:
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request, stripe_signature: str = Header("")) -> dict:
     try:
-        acct = PROVIDER.fulfill(LEDGER, session_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    return {"fulfilled": True, "account": _account_view(acct.id)}
+        event = PROVIDER.verify_event(await request.body(), stripe_signature)
+        return apply_webhook(LEDGER, event)
+    except BillingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.get("/api/checkout/{session_id}")
+def get_checkout_status(session_id: str, account_id: str) -> dict:
+    try:
+        return checkout_status(LEDGER, session_id, account_id)
+    except BillingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 def _count_pages(data: bytes) -> int:
@@ -130,85 +146,88 @@ async def convert(
     fmt: str = Form("xlsx"),
     currency: str = Form("USD"),
     preview: bool = Form(False),
+    idempotency_key: Annotated[Optional[str], Header()] = None,
 ) -> Response:
     """Metered conversion. With ``preview`` set (and a binary ``fmt``), the
     response is JSON carrying both the parsed rows *and* the file
     base64-inline, so a UI can show the preview table and offer the download
     from one call — charging the account once instead of twice."""
-    fmt = (fmt or "xlsx").lower()
-    if fmt not in {"xlsx", "csv", "json"}:
-        raise HTTPException(status_code=400, detail="fmt must be xlsx|csv|json")
-
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="empty upload")
-
-    pages = _count_pages(data)
-    acct = LEDGER.get_or_create(account_id)
-    if not acct.can_process(pages):
-        q = acct.quote(pages)
-        return JSONResponse(
-            status_code=402,
-            content={
-                "error": "insufficient_credits",
-                "detail": (
-                    f"This {pages}-page statement needs "
-                    f"{q['from_credits']} credit(s); you have {acct.credits}."
-                ),
-                "quote": q,
-            },
-        )
-
-    # Parse first; only charge on success.
     try:
-        txns = convert_pdf(io.BytesIO(data), currency=currency)
-    except ConversionError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        fmt = (fmt or "xlsx").lower()
+        if fmt not in {"xlsx", "csv", "json"}:
+            raise HTTPException(status_code=400, detail="fmt must be xlsx|csv|json")
 
-    try:
-        charge = LEDGER.charge_pages(account_id, pages)
-    except InsufficientCredits as exc:  # pragma: no cover - guarded above
-        raise HTTPException(status_code=402, detail=str(exc))
+        data = await file.read(20 * 1024 * 1024 + 1)
+        if len(data) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="PDF uploads are limited to 20 MiB")
+        if not data:
+            raise HTTPException(status_code=400, detail="empty upload")
 
-    summary = summarize(txns).to_dict()
+        if idempotency_key is not None and not 16 <= len(idempotency_key) <= 200:
+            raise HTTPException(status_code=400, detail="Idempotency-Key must be 16 to 200 characters")
+        pages = _count_pages(data)
 
-    if fmt == "json":
-        # Return JSON inline with metadata (handy for the UI table).
-        return JSONResponse(
-            content={
+        # Parse first; only charge on success.
+        try:
+            txns = convert_pdf(io.BytesIO(data), currency=currency)
+        except ConversionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+        summary = summarize(txns).to_dict()
+        # Finish serialization first: failed output generation must not spend pages.
+        if fmt == "json":
+            body = None
+            media = "application/json"
+        elif fmt == "csv":
+            body = to_csv_bytes(txns)
+            media = "text/csv"
+        else:
+            body = to_xlsx_bytes(txns)
+            media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ext = fmt
+
+        try:
+            if idempotency_key:
+                fingerprint = hashlib.sha256(data + b"\0" + fmt.encode() + b"\0" + currency.encode()).hexdigest()
+                charge = LEDGER.charge_pages_once(account_id, pages, idempotency_key, fingerprint)
+            else:
+                charge = LEDGER.charge_pages(account_id, pages)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except InsufficientCredits as exc:
+            acct = LEDGER.get_or_create(account_id)
+            return JSONResponse(status_code=402, content={
+                "error": "insufficient_credits", "detail": str(exc), "quote": acct.quote(pages),
+            })
+
+        if fmt == "json":
+            return JSONResponse(content={
                 "transactions": [t.to_dict() for t in txns],
-                "summary": summary,
-                "charge": charge,
-            }
-        )
+                "summary": summary, "charge": charge,
+            })
 
-    if fmt == "csv":
-        body = to_csv_bytes(txns)
-        media = "text/csv"
-        ext = "csv"
-    else:
-        body = to_xlsx_bytes(txns)
-        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ext = "xlsx"
+        if preview:
+            return JSONResponse(
+                content={
+                    "transactions": [t.to_dict() for t in txns],
+                    "summary": summary,
+                    "charge": charge,
+                    "file_b64": base64.b64encode(body).decode("ascii"),
+                    "filename": f"statement.{ext}",
+                    "media_type": media,
+                }
+            )
 
-    if preview:
-        return JSONResponse(
-            content={
-                "transactions": [t.to_dict() for t in txns],
-                "summary": summary,
-                "charge": charge,
-                "file_b64": base64.b64encode(body).decode("ascii"),
-                "filename": f"statement.{ext}",
-                "media_type": media,
-            }
-        )
-
-    headers = {
-        "Content-Disposition": f'attachment; filename="statement.{ext}"',
-        "X-Transaction-Count": str(summary["count"]),
-        "X-Credits-Remaining": str(charge["credits_after"]),
-    }
-    return Response(content=body, media_type=media, headers=headers)
+        headers = {
+            "Content-Disposition": f'attachment; filename="statement.{ext}"',
+            "X-Transaction-Count": str(summary["count"]),
+            "X-Credits-Remaining": str(charge["credits_after"]),
+        }
+        return Response(content=body, media_type=media, headers=headers)
+    finally:
+        # Starlette may spool larger multipart uploads to disk. Closing here
+        # releases memory and deletes the spill before any response is sent.
+        await file.close()
 
 
 def create_app() -> FastAPI:

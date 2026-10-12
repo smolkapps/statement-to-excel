@@ -101,6 +101,10 @@ def to_xlsx_bytes(txns: Sequence[Transaction]) -> bytes:
                 t.type,
             ]
         )
+        # PDF text is data: openpyxl otherwise interprets a leading '=' as an
+        # executable formula in the downloaded workbook.
+        for column in (2, 5, 6):
+            ws.cell(row=ws.max_row, column=column).data_type = "s"
 
     # Number formats on amount + balance columns; date format on the date column.
     for row in ws.iter_rows(min_row=2):
@@ -132,6 +136,7 @@ def to_xlsx_bytes(txns: Sequence[Transaction]) -> bytes:
     ]
     for r in rows:
         ws2.append(list(r))
+    ws2.cell(row=6, column=2).data_type = "s"
     for cell in ws2[1]:
         cell.font = header_font
         cell.fill = header_fill

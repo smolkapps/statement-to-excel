@@ -6,6 +6,7 @@ export function AccountChip({ account }: { account: AccountState }) {
   const plan = getPlan(account.planId) ?? getPlan("free")!;
   return (
     <div className="account-chip" aria-label={t.account_title}>
+      {account.pro && <span><strong>Pro</strong></span>}
       <span>
         {t.account_plan}: <strong>{plan.name}</strong>
       </span>

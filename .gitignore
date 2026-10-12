@@ -32,3 +32,18 @@ Thumbs.db
 
 # Generated test artifacts
 *.tmp
+
+# Account/payment metadata, never commit local billing state.
+var/
+*.sqlite3
+*.sqlite3-*
+work/
+
+# Runtime billing metadata and verification scratch (never customer statements)
+var/
+backend/var/
+*.sqlite3
+*.sqlite3-*
+work/
+frontend/test-results/
+frontend/playwright-report/

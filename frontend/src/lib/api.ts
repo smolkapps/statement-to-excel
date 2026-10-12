@@ -77,11 +77,12 @@ export class ApiError extends Error {
 }
 
 async function throwApiError(res: Response): Promise<never> {
-  const body = await res.json().catch(() => ({}) as { detail?: string });
+  const body = await res.json().catch(() => ({})) as { detail?: unknown };
+  const detail = typeof body.detail === "string" ? body.detail : `request failed (${res.status})`;
   if (res.status === 402) {
-    throw new ApiError("insufficient", body.detail ?? "insufficient credits");
+    throw new ApiError("insufficient", detail);
   }
-  throw new ApiError("parse", body.detail ?? `request failed (${res.status})`);
+  throw new ApiError("parse", detail);
 }
 
 /** Decode a base64 payload into a Blob (for the inline preview download). */
@@ -100,7 +101,7 @@ interface ConvertPreviewResponse extends ConvertJsonResult {
 
 export interface ConvertOutcome {
   result: ConvertJsonResult;
-  /** The downloadable file for binary formats; null when fmt is "json". */
+  /** Downloadable output, including JSON. */
   blob: Blob | null;
   filename: string;
 }
@@ -111,21 +112,126 @@ export interface ConvertOutcome {
  * itself base64-inline — so the account is charged once per conversion, not
  * once for the preview plus once for the download.
  */
-export async function convertStatement(
+async function requestConversion(
   file: File | Blob,
   opts: { accountId: string; fmt: OutputFormat; currency: string },
+  requestId: string,
 ): Promise<ConvertOutcome> {
   const form = buildConvertForm(file, opts);
   if (opts.fmt !== "json") form.append("preview", "1");
-  const res = await fetch(apiUrl("/api/convert"), { method: "POST", body: form });
+  const res = await fetch(apiUrl("/api/convert"), {
+    method: "POST",
+    body: form,
+    headers: { "Idempotency-Key": requestId },
+  });
   if (!res.ok) await throwApiError(res);
   const body = (await res.json()) as ConvertPreviewResponse;
+  if (!Array.isArray(body.transactions) || typeof body.summary?.count !== "number") {
+    throw new ApiError("parse", "Conversion service returned an unexpected response. Please try again.");
+  }
+  if (opts.fmt !== "json" && (typeof body.file_b64 !== "string" || !body.file_b64)) {
+    throw new ApiError("parse", "Conversion output is missing. Retry this file to download it without another charge.");
+  }
   const blob = body.file_b64
     ? base64ToBlob(body.file_b64, body.media_type ?? "application/octet-stream")
-    : null;
+    : opts.fmt === "json"
+      ? new Blob([JSON.stringify(body, null, 2)], { type: "application/json" })
+      : null;
   return {
     result: body,
     blob,
     filename: body.filename ?? `statement.${opts.fmt}`,
   };
+}
+
+
+// Keep only identity/Promise metadata in a WeakMap. Two clicks share one
+// in-flight request; a network retry of this file/options keeps the same key.
+// The server independently enforces idempotency without retaining PDF data.
+const conversions = new WeakMap<File | Blob, Map<string, {
+  requestId: string;
+  pending?: Promise<ConvertOutcome>;
+}>>();
+
+export function convertStatement(
+  file: File | Blob,
+  opts: { accountId: string; fmt: OutputFormat; currency: string },
+): Promise<ConvertOutcome> {
+  let requests = conversions.get(file);
+  if (!requests) {
+    requests = new Map();
+    conversions.set(file, requests);
+  }
+  const identity = JSON.stringify([opts.accountId, opts.fmt, opts.currency]);
+  let request = requests.get(identity);
+  if (!request) {
+    request = { requestId: crypto.randomUUID() };
+    requests.set(identity, request);
+  }
+  if (!request.pending) {
+    const current = request;
+    current.pending = requestConversion(file, opts, current.requestId).finally(() => {
+      current.pending = undefined;
+    });
+  }
+  return request.pending!;
+}
+
+export interface ServerAccount {
+  id: string;
+  plan: string;
+  credits: number;
+  included_pages: number;
+  pages_used_this_cycle: number;
+  included_remaining: number;
+  pro: boolean;
+}
+
+export interface CheckoutSession {
+  session_id: string;
+  checkout_url: string;
+  provider: "stripe";
+  mode: "test";
+}
+
+export async function fetchAccount(accountId: string): Promise<ServerAccount> {
+  const response = await fetch(apiUrl(`/api/account/${encodeURIComponent(accountId)}`));
+  if (!response.ok) await throwApiError(response);
+  return response.json() as Promise<ServerAccount>;
+}
+
+export async function openCheckout(
+  accountId: string,
+  sku: string,
+  requestId: string,
+): Promise<CheckoutSession> {
+  const response = await fetch(apiUrl("/api/checkout"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": requestId },
+    body: JSON.stringify({ account_id: accountId, sku }),
+  });
+  if (!response.ok) await throwApiError(response);
+  const session = await response.json() as CheckoutSession;
+  const url = new URL(session.checkout_url);
+  if (url.protocol !== "https:" || url.hostname !== "checkout.stripe.com") {
+    throw new Error("Checkout returned an invalid Stripe URL");
+  }
+  return session;
+}
+
+export function navigateCheckout(url: string): void {
+  window.location.assign(url);
+}
+
+
+export interface CheckoutStatus {
+  session_id: string;
+  sku: string;
+  status: "pending" | "fulfilled" | "expired" | "cancelled";
+}
+
+export async function fetchCheckoutStatus(accountId: string, sessionId: string): Promise<CheckoutStatus> {
+  const response = await fetch(apiUrl(`/api/checkout/${encodeURIComponent(sessionId)}?account_id=${encodeURIComponent(accountId)}`));
+  if (!response.ok) await throwApiError(response);
+  return response.json() as Promise<CheckoutStatus>;
 }

@@ -121,12 +121,15 @@ def test_mock_provider_unknown_sku():
         prov.create_checkout("buyer", "not_a_sku")
 
 
-def test_get_provider_default_is_mock(monkeypatch):
+def test_get_provider_default_is_stripe_test(monkeypatch):
     monkeypatch.delenv("STX_BILLING_PROVIDER", raising=False)
-    assert get_provider().name == "mock"
+    monkeypatch.delenv("STX_STRIPE_SECRET_KEY", raising=False)
+    provider = get_provider()
+    assert provider.name == "stripe"
+    assert provider.mode == "test"
 
 
-def test_get_provider_unwired_raises(monkeypatch):
-    monkeypatch.setenv("STX_BILLING_PROVIDER", "stripe")
+def test_deployed_mock_billing_is_forbidden(monkeypatch):
+    monkeypatch.setenv("STX_BILLING_PROVIDER", "mock")
     with pytest.raises(RuntimeError):
         get_provider()

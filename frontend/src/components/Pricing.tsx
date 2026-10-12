@@ -4,9 +4,10 @@ import { PRICING, formatUsd } from "../lib/pricing";
 interface Props {
   onBuyPack?: (packId: string) => void;
   onChoosePlan?: (planId: string) => void;
+  busy?: boolean;
 }
 
-export function Pricing({ onBuyPack, onChoosePlan }: Props) {
+export function Pricing({ onBuyPack, onChoosePlan, busy = false }: Props) {
   const { t } = useI18n();
   return (
     <section className="pricing" id="pricing">
@@ -37,6 +38,7 @@ export function Pricing({ onBuyPack, onChoosePlan }: Props) {
             </ul>
             <button
               className="btn btn-outline"
+              disabled={busy || plan.id === "free"}
               onClick={() => onChoosePlan?.(plan.id)}
             >
               {t.pricing_choose_plan}
@@ -57,6 +59,7 @@ export function Pricing({ onBuyPack, onChoosePlan }: Props) {
             </p>
             <button
               className="btn btn-primary"
+              disabled={busy}
               onClick={() => onBuyPack?.(pack.id)}
             >
               {t.pricing_buy}

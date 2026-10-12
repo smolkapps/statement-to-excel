@@ -1,0 +1,34 @@
+# Deployment contract, not a claim about the external autodeploy host.
+# Replace the document root/upstream with the operator's actual configuration.
+# Run the backend from backend/:
+#   uvicorn statement_to_excel.api:app --host 127.0.0.1 --port 8000
+# Set durable STX_BILLING_DATABASE and test-mode Stripe settings in that service.
+server {
+    listen 80;
+    server_name statement-to-excel.apps.smolkin.org;
+    root /srv/statement-to-excel/frontend/dist;
+
+    # Uploads are bounded at the application too. Match the API upload limit.
+    client_max_body_size 20m;
+
+    # Prefix route must precede the SPA fallback. No trailing slash on
+    # proxy_pass: retain /api/convert exactly as declared by FastAPI.
+    location ^~ /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 120s;
+
+        # Avoid proxying uploads or results through on-disk buffering. Statement
+        # bytes are processed by the API in memory and never persist here.
+        proxy_request_buffering off;
+        proxy_buffering off;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

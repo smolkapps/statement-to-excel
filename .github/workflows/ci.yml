@@ -12,10 +12,17 @@ jobs:
           python-version: '3.12'
       - name: install
         working-directory: backend
-        run: python -m pip install -e ".[test]" || python -m pip install -e ".[dev]" || python -m pip install -e . pytest
+        run: python -m pip install -e ".[test,server]"
       - name: pytest
         working-directory: backend
         run: python -m pytest -q
+      - name: Per-bank accuracy gate
+        working-directory: backend
+        run: python -m tests.accuracy_harness --output ../work/accuracy
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-accuracy-report
+          path: work/accuracy/accuracy-report.json
   node-frontend:
     runs-on: ubuntu-latest
     steps:
@@ -25,10 +32,45 @@ jobs:
           node-version: '20'
       - name: install
         working-directory: frontend
-        run: npm ci || npm install
+        run: npm ci
       - name: build
         working-directory: frontend
         run: npm run build
       - name: test
         working-directory: frontend
         run: npm test
+  browser-end-to-end:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install backend
+        working-directory: backend
+        run: python -m pip install -e ".[test,server]"
+      - name: Generate synthetic PDFs
+        working-directory: backend
+        run: python tests/make_fixtures.py
+      - name: Install frontend and browser
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Real HTTP routing contract (development and production preview)
+        working-directory: frontend
+        run: npm run test:routing
+      - name: Upload, convert, and validate the downloaded workbook
+        working-directory: frontend
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: synthetic-browser-test-results
+          path: work/playwright-results

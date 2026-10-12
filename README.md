@@ -41,7 +41,7 @@ statement-to-excel/
 │   │   ├── transaction.py       # the normalized Transaction model (Decimal)
 │   │   ├── engine.py            # PDF/text -> transactions (table + line strategies)
 │   │   ├── writers.py           # CSV / JSON / styled XLSX (+ summary sheet)
-│   │   ├── billing.py           # credits + subscription metering (mock provider)
+│   │   ├── billing.py           # durable metering + Stripe test Checkout
 │   │   ├── api.py               # FastAPI app (upload -> metered conversion)
 │   │   └── cli.py               # `stx statement.pdf -o out.xlsx`
 │   └── tests/                   # pytest, incl. synthetic PDF fixtures + error paths
@@ -77,7 +77,8 @@ Endpoints (see `api.py` for the full list):
 | `GET`  | `/api/pricing` | plan + credit-pack catalog |
 | `GET`  | `/api/account/{id}` | account metering state |
 | `POST` | `/api/account/{id}/quote` | cost of processing N pages (no charge) |
-| `POST` | `/api/checkout` + `/api/checkout/{sid}/fulfill` | (mock) buy credits / plan |
+| `POST` | `/api/checkout` | idempotent Stripe test Checkout |
+| `POST` | `/api/stripe/webhook` | signed paid event → exactly-once entitlement |
 
 ### Backend (CLI)
 
@@ -136,17 +137,29 @@ and mirrored client-side in `frontend/src/lib/pricing.ts` (kept in sync by
 - **Prepaid credits** — `pack_50` ($30), `pack_200` ($100), `pack_1000` ($400);
   1 credit converts 1 page; volume discounts the per-credit price.
 
-Real payment capture is **stubbed behind `STX_BILLING_PROVIDER`** (default
-`mock`): the mock provider records purchase intents in memory and grants
-credits/plans on fulfilment, so the whole buy→grant flow runs and is unit-tested
-with **no Stripe key**. Wiring a real provider is a single `BillingProvider`
-subclass.
+Checkout uses **Stripe test mode by default** and fails closed until test
+credentials and a signed webhook are configured. Live keys and events are
+rejected. Checkout requests require a stable `Idempotency-Key`; a durable SQLite
+ledger reserves purchases before contacting Stripe and grants Pro only once from
+verified paid webhooks. Browser redirects and localStorage never grant access.
+Mock billing exists only as an explicitly injected unit-test double.
+
+See [AGENTS.md](AGENTS.md) for the deploy model, privacy contract and full
+verification commands. The external frontend autodeploy job does not start the
+backend: production must route `/api/*` to a separately supervised ASGI service
+before the SPA fallback. The repository contains an nginx example, not the
+operator's actual production configuration.
+
+Uploads and converted rows are processed in memory. Multipart spill files are
+closed and deleted immediately in all success and failure paths. Only anonymous
+metering/idempotency and payment metadata is persisted; statement bytes and rows
+are never retained or sent to analytics.
 
 ---
 
 ## Testing
 
-All tests run offline. Fixtures are **synthetic** statements generated with
+Tests use synthetic statements and fake Stripe transports; conversion makes no outbound calls. Fixtures are **synthetic** statements generated with
 reportlab (`backend/tests/make_fixtures.py`) — no private data.
 
 ```bash
@@ -154,18 +167,19 @@ reportlab (`backend/tests/make_fixtures.py`) — no private data.
 cd backend && . .venv/bin/activate
 pip install -e ".[test]"
 python tests/make_fixtures.py     # (re)generate fixtures (also auto-built by conftest)
-pytest                            # 81 tests
+pytest
 
 # Frontend
 cd frontend && npm install
-npm test                          # 37 tests (vitest)
+npm test                          # Vitest suites
+npm run test:e2e                   # headless Chromium against real API
 ```
 
 What's covered: exact-equality parsing on a clean ruled fixture; field-accuracy
 on messier borderless/credit-card fixtures; the OCR-only error path; every output
-writer; the full metering math and the mock purchase flow; the API end-to-end via
+writer; durable metering, signed webhooks, duplicate/concurrent/restarted checkout and purchase flows; the API end-to-end via
 Starlette's `TestClient` (including 402 insufficient-credits and 422 unparseable
-paths); and on the frontend, locale parity (no missing/stray/empty keys, real
+paths); 10 bank-inspired synthetic layouts with a strict 100% complete-row gate; and on the frontend, locale parity (no missing/stray/empty keys, real
 translations), pricing math, the localStorage account store, the API form
 builder, and a React component render + interaction test.
 

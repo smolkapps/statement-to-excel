@@ -16,10 +16,11 @@ describe("hosted converter disclosure", () => {
       expect(LOCALES[code].hero_trust).toMatch(serverTerms[code]);
     });
   }
-  it("does not promise browser-only processing or absolute non-retention", () => {
+  it("preserves no stored statement data and discloses server processing", () => {
     const en = LOCALES.en;
     expect([en.hero_trust, en.feature_private_title, en.feature_private_body].join(" "))
-      .not.toMatch(/processed locally|no data is stored|never leaves your/i);
+      .not.toMatch(/processed locally|never leaves your/i);
+    expect(en.hero_trust).toMatch(/no data is stored|statement data is never stored/i);
     expect(en.feature_private_body).toContain("without sending your statement to a third-party AI API");
   });
 });
