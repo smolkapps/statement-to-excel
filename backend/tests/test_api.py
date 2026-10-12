@@ -17,16 +17,15 @@ from fastapi.testclient import TestClient
 
 import statement_to_excel.api as api_mod
 from statement_to_excel.billing import (
-    CREDIT_PACKS, PLANS, Ledger, MockBillingProvider,
+    CREDIT_PACKS, PLANS, Ledger,
     PersistentLedger, StripeBillingProvider,
 )
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, configured_provider):
     # Fresh ledger + provider per test.
     monkeypatch.setattr(api_mod, "LEDGER", Ledger())
-    monkeypatch.setattr(api_mod, "PROVIDER", MockBillingProvider())
     return TestClient(api_mod.app)
 
 
@@ -79,13 +78,15 @@ def test_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
-    assert r.json()["billing"] == "mock"
+    assert r.json()["billing"] == "stripe"
+    assert r.json()["checkout_available"] is True
 
 
 def test_pricing_catalog(client):
     r = client.get("/api/pricing")
     assert r.status_code == 200
     body = r.json()
+    assert body["checkout_available"] is True
     ids = {p["id"] for p in body["plans"]}
     assert {"free", "starter", "business", "firm"} <= ids
     assert any(p["id"] == "pack_50" for p in body["credit_packs"])

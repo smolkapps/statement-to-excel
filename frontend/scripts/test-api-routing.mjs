@@ -22,7 +22,9 @@ try {
         assert.equal(body.summary.count, 5);
         assert.equal(body.transactions[0].description, "ACH PAYROLL DEPOSIT");
         assert.equal(body.transactions[0].amount, "3250.00");
-        assert.equal(body.charge.pages, 1);
+        assert.deepEqual(body.charge, { metered: false, pages: 1 }, "default missing-key conversion is explicitly unmetered");
+        const pricing = await fetch(`${frontend.origin}/api/pricing`);
+        assert.equal((await pricing.json()).checkout_available, false);
 
         // Unknown API routes must also remain API 404s, never success/SPA HTML.
         const missing = await fetch(`${frontend.origin}/api/not-a-route`);

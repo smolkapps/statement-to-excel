@@ -20,10 +20,30 @@ export default defineConfig({
     launchOptions: { executablePath },
     trace: "retain-on-failure",
   },
-  webServer: {
-    command: "node e2e/start-stack.mjs",
-    url: "http://127.0.0.1:4173/api/health",
-    reuseExistingServer: false,
-    timeout: 30_000,
-  },
+  projects: [
+    {
+      name: "configured-billing",
+      testMatch: "conversion.spec.ts",
+      use: { baseURL: "http://127.0.0.1:4174" },
+    },
+    {
+      name: "unconfigured-billing",
+      testMatch: "availability.spec.ts",
+      use: { baseURL: "http://127.0.0.1:4173" },
+    },
+  ],
+  webServer: [
+    {
+      command: "node e2e/start-stack.mjs --port=4173",
+      url: "http://127.0.0.1:4173/api/health",
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
+      command: "node e2e/start-stack.mjs --configured --port=4174",
+      url: "http://127.0.0.1:4174/api/health",
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+  ],
 });

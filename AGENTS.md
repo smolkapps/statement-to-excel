@@ -5,7 +5,8 @@
 This monorepo converts text-based bank-statement PDFs to Excel, CSV or JSON.
 `frontend/` is Vite/React/TypeScript; `backend/` is Python/FastAPI, pdfplumber,
 Decimal transaction parsing and in-memory output writers. It supports a free
-page allowance, paid plans and prepaid credits. The bank accuracy corpus is
+page allowance, paid plans and prepaid credits when checkout is configured;
+otherwise conversion is unmetered. The bank accuracy corpus is
 programmatically generated, synthetic and bank-inspired; it is not a claim of
 compatibility with every real statement from those banks.
 
@@ -75,7 +76,8 @@ customer information, secrets or generated runtime databases.
 
 Only anonymous account IDs, usage counters, opaque idempotency keys, one-way
 conversion fingerprints and payment/entitlement metadata enter the billing
-SQLite database. Conversion idempotency rows include a SHA-256 fingerprint
+SQLite database in configured billing mode. Unmetered conversion writes no
+account, conversion-idempotency or checkout rows. Conversion idempotency rows include a SHA-256 fingerprint
 of the upload and conversion options and a fixed creation timestamp. Their
 retention window is **24 hours**; replays do not extend it. Every conversion
 POST opportunistically deletes rows older than 24 hours, including rejected
@@ -100,9 +102,34 @@ rows and signs, and requires 100% for its known synthetic ground truth.
 
 Billing stays in **Stripe test mode until Michael approves live charges**.
 This implementation rejects live keys and live webhook events; no configuration
-switch enables live payments. Default checkout fails closed until test credentials
-and webhook settings exist. Mock billing is only an explicitly injected test
+switch enables live payments. Mock billing is only an explicitly injected test
 double, not a supported deployment provider.
+
+The service has two modes, controlled by the Stripe provider's single
+`checkout_available` configuration rule. Both `GET /api/pricing` and
+`GET /api/health` expose that boolean without exposing credentials.
+
+- **Checkout unavailable:** production runs with `STX_BILLING_PROVIDER=stripe`
+  and remains **unmetered until Stripe test credentials and the webhook are
+  configured**. Missing either an `sk_test_` secret key or a `whsec_` webhook
+  secret makes `checkout_available=false`. Any valid page count converts with
+  the same 20 MiB upload limit, PDF validation, output formats and upload deletion.
+  Conversion returns `charge: {"metered": false, "pages": N}` and never consumes
+  allowance/credits or returns 402. Requests write no account, conversion-charge
+  or checkout rows; cleanup of previously expired fingerprints may still run.
+  The frontend reads `/api/pricing` on load, treating failure as unavailable;
+  it hides pricing navigation, the hero pricing button, Pricing and the account
+  chip, and makes no account or checkout requests.
+- **Checkout available:** both credentials satisfy the existing Stripe test
+  configuration rule. `checkout_available=true` enables the existing three-page
+  free allowance, plan/credit metering, 24-hour conversion idempotency and 402
+  responses when allowance/credits are exhausted. Checkout creation and paid
+  webhooks retain their durable purchase/Pro idempotency guarantees. Frontend
+  checkout failures use the localized `checkout_error` copy, never raw backend
+  billing text. Availability indicates configuration, not a successful remote
+  Stripe connectivity test.
+
+Do not add marketing promises about this temporary configuration mode.
 
 The anonymous cryptographic account ID is a bearer capability: possession permits
 using its allowance. The implementation supports one host with a durable SQLite

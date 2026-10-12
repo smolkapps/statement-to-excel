@@ -143,7 +143,7 @@ def test_legacy_four_column_migration_expires_unknown_ages_without_undoing_debit
 
 
 @pytest.mark.parametrize("failure", ["missing-file", "multipart", "format", "empty", "header", "parse", "quota", "writer"])
-def test_every_failed_conversion_request_purges_expired_metadata(ledger, clock, monkeypatch, fixtures_dir, failure):
+def test_every_failed_conversion_request_purges_expired_metadata(ledger, clock, monkeypatch, fixtures_dir, failure, configured_provider):
     ledger.charge_pages_once("old-account", 1, "expired-key", "old-fingerprint")
     clock[0] += TTL + 0.001
     # Retain a row created exactly 24 hours ago to check the strict boundary.

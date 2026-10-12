@@ -6,6 +6,7 @@ import {
   buildConvertForm,
   convertStatement,
   fetchAccount,
+  fetchCheckoutAvailability,
   fetchCheckoutStatus,
   openCheckout,
 } from "./api";
@@ -35,6 +36,12 @@ describe("api helpers", () => {
     expect(form.get("fmt")).toBe("csv");
     expect(form.get("currency")).toBe("EUR");
     expect(form.get("file")).toBeInstanceOf(Blob);
+  });
+
+  it("omits account identity from an unmetered conversion form", () => {
+    const form = buildConvertForm(new Blob(["synthetic"]), { fmt: "xlsx", currency: "USD" });
+    expect(form.get("account_id")).toBeNull();
+    expect(form.get("fmt")).toBe("xlsx");
   });
 
   it("decodes base64 into a typed Blob", async () => {
@@ -190,6 +197,24 @@ describe("convertStatement", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/checkout/cs_test_1?account_id=web_test");
   });
 
+  it.each([
+    [true, true],
+    [false, false],
+    [undefined, false],
+    ["true", false],
+    [1, false],
+  ])("enables checkout only for strict pricing availability %s", async (value, expected) => {
+    const fetchMock = vi.fn().mockResolvedValue(fakeResponse(200, { checkout_available: value }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await fetchCheckoutAvailability()).toBe(expected);
+    expect(fetchMock).toHaveBeenCalledWith("/api/pricing");
+  });
+
+  it("rejects failed availability requests so the App can fail closed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(fakeResponse(503, { detail: "internal configuration" })));
+    await expect(fetchCheckoutAvailability()).rejects.toThrow();
+  });
+
   it("maps 402 to an 'insufficient' ApiError", async () => {
     vi.stubGlobal(
       "fetch",
@@ -198,6 +223,12 @@ describe("convertStatement", () => {
     await expect(
       convertStatement(pdf, { accountId: "a", fmt: "csv", currency: "USD" }),
     ).rejects.toMatchObject({ name: "ApiError", kind: "insufficient" });
+  });
+
+  it("preserves the HTTP status so billing conflicts can receive localized UI errors", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(409, { detail: "Idempotency key belongs to another conversion." })));
+    await expect(convertStatement(new Blob(["synthetic"]), { accountId: "conflict", fmt: "json", currency: "USD" }))
+      .rejects.toMatchObject({ name: "ApiError", kind: "parse", status: 409 });
   });
 
   it("maps a parse failure (422) to a 'parse' ApiError", async () => {

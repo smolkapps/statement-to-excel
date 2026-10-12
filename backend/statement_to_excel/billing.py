@@ -170,6 +170,11 @@ class Ledger:
                 self.accounts[account_id] = acct
             return acct
 
+    def get_if_exists(self, account_id: str) -> Account:
+        """Read an account or return an ephemeral default without persisting it."""
+        with self._lock:
+            return self.accounts.get(account_id) or Account(id=account_id)
+
     def set_plan(self, account_id: str, plan_id: str) -> Account:
         if plan_id not in PLANS:
             raise KeyError(f"unknown plan: {plan_id}")
@@ -363,6 +368,11 @@ class PersistentLedger(Ledger):
             self.ensure_account(db, account_id)
             return self.read_account(db, account_id)
 
+    def get_if_exists(self, account_id):
+        with self.transaction() as db:
+            found = db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone()
+            return self.read_account(db, account_id) if found else Account(id=account_id)
+
     def set_plan(self, account_id, plan_id):
         if plan_id not in PLANS:
             raise KeyError(f"unknown plan: {plan_id}")
@@ -479,8 +489,13 @@ class StripeBillingProvider(BillingProvider):
         if parsed.scheme == 'http' and parsed.hostname not in {'localhost', '127.0.0.1'}:
             raise RuntimeError("Checkout return origin must use HTTPS except localhost.")
 
+    @property
+    def checkout_available(self) -> bool:
+        """One source of truth for configured Stripe TEST checkout and metering."""
+        return self.secret_key.startswith('sk_test_') and self.webhook_secret.startswith('whsec_')
+
     def check_configuration(self):
-        if not self.secret_key or not self.webhook_secret.startswith('whsec_'):
+        if not self.checkout_available:
             raise BillingError("Checkout is unavailable until Stripe test credentials and webhook are configured.")
 
     def create_checkout(self, account_id, sku, idempotency_key):

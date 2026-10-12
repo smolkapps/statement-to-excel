@@ -10,13 +10,16 @@ from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 
 import statement_to_excel.api as api
-from statement_to_excel.billing import Ledger
+from statement_to_excel.billing import Ledger, StripeBillingProvider
 
 
 @pytest.mark.parametrize("outcome", ["success", "parse", "format", "empty", "quota", "writer", "oversize"])
-def test_spooled_upload_deleted_before_endpoint_returns(monkeypatch, fixtures_dir, tmp_path, outcome):
+@pytest.mark.parametrize("metered", [False, True])
+def test_spooled_upload_deleted_before_endpoint_returns(monkeypatch, fixtures_dir, tmp_path, outcome, metered, configured_provider):
     ledger = Ledger()
     monkeypatch.setattr(api, "LEDGER", ledger)
+    if not metered:
+        monkeypatch.setattr(api, "PROVIDER", StripeBillingProvider(secret_key="", webhook_secret=""))
     data = (fixtures_dir / ("scanned_empty.pdf" if outcome == "parse" else "acmebank.pdf")).read_bytes()
     if outcome == "empty":
         data = b""
@@ -47,7 +50,7 @@ def test_spooled_upload_deleted_before_endpoint_returns(monkeypatch, fixtures_di
                 asyncio.run(api.convert(**kwargs))
         else:
             response = asyncio.run(api.convert(**kwargs))
-            assert response.status_code == (402 if outcome == "quota" else 200)
+            assert response.status_code == (402 if outcome == "quota" and metered else 200)
         assert spool.closed, "upload must close immediately, before the endpoint returns"
         with pytest.raises(OSError):
             os.fstat(fd)

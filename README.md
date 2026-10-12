@@ -137,9 +137,29 @@ and mirrored client-side in `frontend/src/lib/pricing.ts` (kept in sync by
 - **Prepaid credits** — `pack_50` ($30), `pack_200` ($100), `pack_1000` ($400);
   1 credit converts 1 page; volume discounts the per-credit price.
 
-Checkout uses **Stripe test mode by default** and fails closed until test
-credentials and a signed webhook are configured. Live keys and events are
-rejected. Checkout requests require a stable `Idempotency-Key`; a durable SQLite
+The service has two configuration modes. **Production runs unmetered until
+Stripe test credentials and the webhook are configured**, with
+`STX_BILLING_PROVIDER=stripe` and both keys unset initially.
+
+- **Checkout unavailable:** missing either an `sk_test_` secret key or a `whsec_`
+  webhook secret means `checkout_available=false`. Conversion accepts any valid
+  page count under the 20 MiB limit, with all PDF validation and deletion intact.
+  It consumes no allowance/credits, never returns 402, writes no account,
+  conversion-charge or checkout rows, and returns
+  `charge: {"metered": false, "pages": N}`. Expired-fingerprint cleanup may still
+  run. The UI hides the Pricing section and links, hero pricing button and
+  account chip, and makes no account or checkout calls. A failed pricing request
+  is treated as unavailable.
+- **Configured Stripe test billing:** both credentials satisfy the existing
+  provider configuration rule, making `checkout_available=true`. The existing
+  three-page free allowance, plan/credit metering, 24-hour conversion retry
+  protection, 402 errors and idempotent checkout/Pro grants apply. Checkout errors
+  display localized copy rather than backend configuration text.
+
+Both `GET /api/pricing` and `GET /api/health` expose `checkout_available`; the
+Stripe provider is its single source of truth. The flag describes configuration
+readiness, not remote Stripe connectivity. Live keys and events are rejected.
+Checkout requests require a stable `Idempotency-Key`; a durable SQLite
 ledger reserves purchases before contacting Stripe and grants Pro only once from
 verified paid webhooks. Browser redirects and localStorage never grant access.
 Mock billing exists only as an explicitly injected unit-test double.
@@ -158,8 +178,9 @@ multipart spill files are closed and deleted immediately in all success and
 failure paths. Statement bytes and extracted rows are never persisted or sent
 to analytics.
 
-Account/credit records and payment metadata are stored. For conversion retries,
-the service also stores a SHA-256 fingerprint of the upload and conversion
+Account/credit records and payment metadata are stored in configured billing
+mode. Unmetered conversion creates no billing rows. For metered conversion
+retries, the service also stores a SHA-256 fingerprint of the upload and conversion
 options in an idempotency row with a **24-hour retention window**, measured from
 its creation; replaying it does not refresh the window. Every conversion POST
 purges rows older than 24 hours, including rejected requests. Cleanup is

@@ -24,12 +24,20 @@ export interface Summary {
 }
 
 /** The ledger entry the backend returns for a successful metered conversion. */
-export interface ChargeInfo {
+export interface MeteredChargeInfo {
+  metered?: true;
   pages: number;
   from_included: number;
   from_credits: number;
   credits_after: number;
 }
+
+export interface UnmeteredChargeInfo {
+  metered: false;
+  pages: number;
+}
+
+export type ChargeInfo = MeteredChargeInfo | UnmeteredChargeInfo;
 
 export interface ConvertJsonResult {
   transactions: TransactionRow[];
@@ -46,11 +54,11 @@ export function apiUrl(path: string): string {
 /** Build the multipart form for /api/convert (extracted for unit testing). */
 export function buildConvertForm(
   file: File | Blob,
-  opts: { accountId: string; fmt: OutputFormat; currency: string },
+  opts: { accountId?: string; fmt: OutputFormat; currency: string },
 ): FormData {
   const form = new FormData();
   form.append("file", file);
-  form.append("account_id", opts.accountId);
+  if (opts.accountId) form.append("account_id", opts.accountId);
   form.append("fmt", opts.fmt);
   form.append("currency", opts.currency);
   return form;
@@ -70,6 +78,7 @@ export class ApiError extends Error {
   constructor(
     public readonly kind: ConvertError["kind"],
     message: string,
+    public readonly status?: number,
   ) {
     super(message);
     this.name = "ApiError";
@@ -80,9 +89,9 @@ async function throwApiError(res: Response): Promise<never> {
   const body = await res.json().catch(() => ({})) as { detail?: unknown };
   const detail = typeof body.detail === "string" ? body.detail : `request failed (${res.status})`;
   if (res.status === 402) {
-    throw new ApiError("insufficient", detail);
+    throw new ApiError("insufficient", detail, res.status);
   }
-  throw new ApiError("parse", detail);
+  throw new ApiError("parse", detail, res.status);
 }
 
 /** Decode a base64 payload into a Blob (for the inline preview download). */
@@ -114,7 +123,7 @@ export interface ConvertOutcome {
  */
 async function requestConversion(
   file: File | Blob,
-  opts: { accountId: string; fmt: OutputFormat; currency: string },
+  opts: { accountId?: string; fmt: OutputFormat; currency: string },
   requestId: string,
 ): Promise<ConvertOutcome> {
   const form = buildConvertForm(file, opts);
@@ -155,7 +164,7 @@ const conversions = new WeakMap<File | Blob, Map<string, {
 
 export function convertStatement(
   file: File | Blob,
-  opts: { accountId: string; fmt: OutputFormat; currency: string },
+  opts: { accountId?: string; fmt: OutputFormat; currency: string },
 ): Promise<ConvertOutcome> {
   let requests = conversions.get(file);
   if (!requests) {
@@ -234,4 +243,13 @@ export async function fetchCheckoutStatus(accountId: string, sessionId: string):
   const response = await fetch(apiUrl(`/api/checkout/${encodeURIComponent(sessionId)}?account_id=${encodeURIComponent(accountId)}`));
   if (!response.ok) await throwApiError(response);
   return response.json() as Promise<CheckoutStatus>;
+}
+
+
+/** Billing stays hidden unless the backend explicitly advertises availability. */
+export async function fetchCheckoutAvailability(): Promise<boolean> {
+  const response = await fetch(apiUrl("/api/pricing"));
+  if (!response.ok) await throwApiError(response);
+  const pricing = await response.json() as { checkout_available?: unknown };
+  return pricing.checkout_available === true;
 }

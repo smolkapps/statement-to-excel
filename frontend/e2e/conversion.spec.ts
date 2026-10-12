@@ -37,6 +37,8 @@ async function visit(page: Page) {
     Object.defineProperty(window, "umami", { value: { track: (event: string) => events.push(event) } });
   });
   await page.goto("/");
+  // Await the configured capability response before testing metered conversion.
+  await expect(page.locator(".account-chip")).toBeVisible();
 }
 
 async function account(page: Page) {
@@ -157,7 +159,14 @@ assert result['accuracy'] == 1, result
   expect((await account(page)).pages_used_this_cycle).toBe(2);
 });
 
-test("disabled Stripe checkout rejects a double click and retry without granting Pro", async ({ page }) => {
+test("a failed configured checkout rejects a double click and retries its intent without granting Pro", async ({ page }) => {
+  // Test the UI retry contract without making any request to Stripe. Provider
+  // failures and durable idempotency are exercised in the Python API suite.
+  await page.route("**/api/checkout", (route) => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ detail: "Synthetic provider outage" }),
+  }));
   await visit(page);
   const keys: (string | undefined)[] = [];
   page.on("request", (request) => {
@@ -171,7 +180,7 @@ test("disabled Stripe checkout rejects a double click and retry without granting
     (button as HTMLButtonElement).click();
   });
   expect((await failed).status()).toBe(503);
-  await expect(page.getByRole("alert")).toContainText(/Stripe test credentials.*webhook/i);
+  await expect(page.getByRole("alert")).toHaveText("Checkout could not be opened. Please try again.");
   expect(keys).toHaveLength(1);
   await expect(choose).toBeEnabled();
   const retried = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/checkout");

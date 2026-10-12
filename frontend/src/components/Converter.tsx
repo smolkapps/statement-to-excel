@@ -11,7 +11,7 @@ import { track } from "../lib/analytics";
 const CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CNY", "CHF", "CAD", "AUD"];
 
 interface Props {
-  accountId: string;
+  accountId?: string;
   onCharged?: (pages: number) => void;
 }
 
@@ -72,7 +72,9 @@ export function Converter({ accountId, onCharged }: Props) {
       });
       setResult(result);
       track("convert-success");
-      onCharged?.(result.charge?.pages ?? 1);
+      if (result.charge && result.charge.metered !== false) {
+        onCharged?.(result.charge.pages);
+      }
       if (blob) {
         setDownload({ blob, filename });
         triggerDownload(blob, filename);
@@ -81,6 +83,8 @@ export function Converter({ accountId, onCharged }: Props) {
       track("convert-error");
       if (err instanceof ApiError && err.kind === "insufficient") {
         setError(t.convert_error_insufficient);
+      } else if (err instanceof ApiError && (err.status === 409 || (err.status !== undefined && err.status >= 500))) {
+        setError(t.convert_error_generic);
       } else if (err instanceof ApiError) {
         setError(err.message);
       } else {

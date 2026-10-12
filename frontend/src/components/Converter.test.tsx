@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n/I18nContext";
+import { LOCALES, LOCALE_ORDER, type LocaleCode } from "../i18n";
 
 // Mock the API client so the component test drives the UI, not the network.
 // Keep ApiError real (the component branches on `instanceof ApiError`).
@@ -14,9 +15,9 @@ vi.mock("../lib/api", async () => {
 import { Converter } from "./Converter";
 import { ApiError, type ConvertOutcome } from "../lib/api";
 
-function renderConverter(props: Parameters<typeof Converter>[0]) {
+function renderConverter(props: Parameters<typeof Converter>[0], locale: LocaleCode = "en") {
   return render(
-    <I18nProvider initialLocale="en">
+    <I18nProvider initialLocale={locale}>
       <Converter {...props} />
     </I18nProvider>,
   );
@@ -145,6 +146,37 @@ describe("Converter", () => {
     selectFileAndConvert();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(detail));
     expect(analytics.mock.calls).toEqual([["file-selected"], ["convert-error"]]);
+  });
+
+  it.each([undefined, { metered: false as const, pages: 5 }])("does not refresh billing for an unmetered or absent charge: %s", async (charge) => {
+    const converted = outcome(5);
+    converted.result.charge = charge;
+    convertStatement.mockResolvedValue(converted);
+    const onCharged = vi.fn();
+    renderConverter({ accountId: "web_test", onCharged });
+    selectFileAndConvert();
+    await waitFor(() => expect(screen.getByText("ACH PAYROLL DEPOSIT")).toBeInTheDocument());
+    expect(onCharged).not.toHaveBeenCalled();
+  });
+
+  it.each(LOCALE_ORDER)("hides raw conversion billing conflicts behind the existing generic message in %s", async (locale) => {
+    const detail = "Idempotency key belongs to another conversion.";
+    convertStatement.mockRejectedValue(new ApiError("parse", detail, 409));
+    renderConverter({ accountId: "web_test" }, locale);
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [new File(["synthetic"], "statement.pdf")] } });
+    fireEvent.click(screen.getByRole("button", { name: LOCALES[locale].convert_button }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(LOCALES[locale].convert_error_generic));
+    expect(screen.getByRole("alert")).not.toHaveTextContent(detail);
+  });
+
+  it("hides raw billing or service-unavailable errors during conversion", async () => {
+    const detail = "Stripe billing provider is unavailable because internal configuration is missing.";
+    convertStatement.mockRejectedValue(new ApiError("parse", detail, 503));
+    renderConverter({ accountId: "web_test" });
+    selectFileAndConvert();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(LOCALES.en.convert_error_generic));
+    expect(screen.getByRole("alert")).not.toHaveTextContent(detail);
   });
 
   it("does not charge when the account has insufficient credits", async () => {

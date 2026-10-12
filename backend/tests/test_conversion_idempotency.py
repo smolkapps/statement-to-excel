@@ -7,7 +7,7 @@ from statement_to_excel.billing import Ledger
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, configured_provider):
     monkeypatch.setattr(api, "LEDGER", Ledger())
     return TestClient(api.app)
 

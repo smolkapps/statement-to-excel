@@ -200,7 +200,7 @@ def test_mismatched_paid_events_cannot_grant(ledger, provider, mutation):
 
 def test_real_sdk_signed_webhook_only_can_grant_via_api(ledger, provider, monkeypatch):
     sid = buy(ledger, provider)["session_id"]
-    stripe_provider = StripeBillingProvider(webhook_secret="whsec_synthetic_not_a_credential")
+    stripe_provider = StripeBillingProvider("sk_test_synthetic_not_a_credential", "whsec_synthetic_not_a_credential")
     monkeypatch.setattr(api, "LEDGER", ledger)
     monkeypatch.setattr(api, "PROVIDER", stripe_provider)
     payload = json.dumps(paid_event(sid)).encode()

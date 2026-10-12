@@ -14,8 +14,8 @@ Endpoints
 Conversion and output generation run locally in memory. Usage is charged only
 after successful output generation. Optional Idempotency-Key prevents repeat
 usage debits for 24 hours after creation; replay does not extend that window.
-Billing stores metadata only; test Checkout remains disabled until
-Stripe test credentials and signed webhooks are configured.
+Billing stores metadata only. Until Stripe test Checkout and signed webhooks are
+configured, conversions are unmetered and write no account or conversion records.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import __version__
 from .billing import (
-    BillingError, InsufficientCredits, PersistentLedger, PRICING,
+    BillingError, InsufficientCredits, PersistentLedger, PRICING, StripeBillingProvider,
     apply_webhook, checkout_status, create_checkout, get_provider,
 )
 from .engine import ConversionError, convert_pdf, summarize
@@ -74,8 +74,13 @@ class CheckoutRequest(BaseModel):
     sku: str
 
 
+def checkout_available() -> bool:
+    """Only a configured Stripe test provider enables checkout and metering."""
+    return isinstance(PROVIDER, StripeBillingProvider) and PROVIDER.checkout_available
+
+
 def _account_view(account_id: str) -> dict:
-    acct = LEDGER.get_or_create(account_id)
+    acct = LEDGER.get_or_create(account_id) if checkout_available() else LEDGER.get_if_exists(account_id)
     return {
         "id": acct.id,
         "plan": acct.plan_id,
@@ -92,12 +97,13 @@ def _account_view(account_id: str) -> dict:
 # --------------------------------------------------------------------------- #
 @app.get("/api/health")
 def health() -> dict:
-    return {"status": "ok", "version": __version__, "billing": PROVIDER.name}
+    return {"status": "ok", "version": __version__, "billing": PROVIDER.name,
+            "checkout_available": checkout_available()}
 
 
 @app.get("/api/pricing")
 def pricing() -> dict:
-    return PRICING
+    return {**PRICING, "checkout_available": checkout_available()}
 
 
 @app.get("/api/account/{account_id}")
@@ -109,12 +115,16 @@ def get_account(account_id: str) -> dict:
 def quote(account_id: str, body: QuoteRequest) -> dict:
     if body.pages < 0:
         raise HTTPException(status_code=400, detail="pages must be >= 0")
+    if not checkout_available():
+        return {"pages": body.pages, "metered": False, "sufficient": True}
     acct = LEDGER.get_or_create(account_id)
     return acct.quote(body.pages)
 
 
 @app.post("/api/checkout")
 def checkout(body: CheckoutRequest, idempotency_key: str = Header("")) -> dict:
+    if not checkout_available():
+        raise HTTPException(status_code=503, detail="Checkout is unavailable until Stripe test credentials and webhook are configured.")
     try:
         return create_checkout(LEDGER, PROVIDER, body.account_id, body.sku, idempotency_key)
     except BillingError as exc:
@@ -123,6 +133,8 @@ def checkout(body: CheckoutRequest, idempotency_key: str = Header("")) -> dict:
 
 @app.post("/api/stripe/webhook")
 async def stripe_webhook(request: Request, stripe_signature: str = Header("")) -> dict:
+    if not checkout_available():
+        raise HTTPException(status_code=503, detail="Stripe test checkout and webhook must be configured before payments can be fulfilled.")
     try:
         event = PROVIDER.verify_event(await request.body(), stripe_signature)
         return apply_webhook(LEDGER, event)
@@ -163,6 +175,7 @@ async def convert(
     base64-inline, so a UI can show the preview table and offer the download
     from one call — charging the account once instead of twice."""
     try:
+        metered = checkout_available()
         fmt = (fmt or "xlsx").lower()
         if fmt not in {"xlsx", "csv", "json"}:
             raise HTTPException(status_code=400, detail="fmt must be xlsx|csv|json")
@@ -196,19 +209,21 @@ async def convert(
             media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ext = fmt
 
-        try:
-            if idempotency_key:
-                fingerprint = hashlib.sha256(data + b"\0" + fmt.encode() + b"\0" + currency.encode()).hexdigest()
-                charge = LEDGER.charge_pages_once(account_id, pages, idempotency_key, fingerprint)
-            else:
-                charge = LEDGER.charge_pages(account_id, pages)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
-        except InsufficientCredits as exc:
-            acct = LEDGER.get_or_create(account_id)
-            return JSONResponse(status_code=402, content={
-                "error": "insufficient_credits", "detail": str(exc), "quote": acct.quote(pages),
-            })
+        charge = {"metered": False, "pages": pages}
+        if metered:
+            try:
+                if idempotency_key:
+                    fingerprint = hashlib.sha256(data + b"\0" + fmt.encode() + b"\0" + currency.encode()).hexdigest()
+                    charge = LEDGER.charge_pages_once(account_id, pages, idempotency_key, fingerprint)
+                else:
+                    charge = LEDGER.charge_pages(account_id, pages)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc))
+            except InsufficientCredits as exc:
+                acct = LEDGER.get_or_create(account_id)
+                return JSONResponse(status_code=402, content={
+                    "error": "insufficient_credits", "detail": str(exc), "quote": acct.quote(pages),
+                })
 
         if fmt == "json":
             return JSONResponse(content={
@@ -231,8 +246,9 @@ async def convert(
         headers = {
             "Content-Disposition": f'attachment; filename="statement.{ext}"',
             "X-Transaction-Count": str(summary["count"]),
-            "X-Credits-Remaining": str(charge["credits_after"]),
         }
+        if metered:
+            headers["X-Credits-Remaining"] = str(charge["credits_after"])
         return Response(content=body, media_type=media, headers=headers)
     finally:
         # Starlette may spool larger multipart uploads to disk. Closing here

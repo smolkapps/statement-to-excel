@@ -15,7 +15,7 @@ from tests.test_pdf_edges import _pdf, _text_page
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, configured_provider):
     monkeypatch.setattr(api, "LEDGER", Ledger())
     return TestClient(api.app)
 

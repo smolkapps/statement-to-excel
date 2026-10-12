@@ -6,7 +6,7 @@ import { Converter } from "./components/Converter";
 import { Pricing } from "./components/Pricing";
 import { AccountChip } from "./components/AccountChip";
 import { useI18n } from "./i18n/I18nContext";
-import { fetchAccount, fetchCheckoutStatus, navigateCheckout, openCheckout } from "./lib/api";
+import { fetchAccount, fetchCheckoutAvailability, fetchCheckoutStatus, navigateCheckout, openCheckout } from "./lib/api";
 import { track } from "./lib/analytics";
 import { newAccount, type AccountState } from "./lib/pricing";
 
@@ -59,15 +59,36 @@ export default function App() {
   const { t } = useI18n();
   const [account, setAccount] = useState<AccountState>(() => newAccount());
   const [accountId] = useState(getAccountId);
+  const [checkoutAvailable, setCheckoutAvailable] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
-  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutError, setCheckoutError] = useState(false);
+  const billingActive = useRef(false);
   const checkoutPending = useRef(false);
   const accountRequestSequence = useRef(0);
   const checkoutIntents = useRef(new Map<string, string>());
   const checkoutSessions = useRef(new Map<string, SavedCheckout>());
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCheckoutAvailability().then((available) => {
+      if (cancelled) return;
+      if (available) {
+        billingActive.current = true;
+        setCheckoutAvailable(true);
+      }
+    }).catch(() => {
+      // A failed availability request leaves billing hidden and conversion usable.
+    });
+    return () => {
+      cancelled = true;
+      billingActive.current = false;
+    };
+  }, []);
+
   const reconcileCheckout = useCallback(async (sessionId: string) => {
+    if (!billingActive.current || !accountId) return;
     const status = await fetchCheckoutStatus(accountId, sessionId);
+    if (!billingActive.current) return;
     if (status.status !== "fulfilled" && status.status !== "expired" && status.status !== "cancelled") return;
     const saved = checkoutSessions.current.get(status.sku) ?? savedCheckout(accountId, status.sku);
     // A replayed URL for an older paid session must not clear a newer intent.
@@ -86,9 +107,10 @@ export default function App() {
   }, [accountId]);
 
   const refreshAccount = useCallback(async () => {
+    if (!billingActive.current || !accountId) return;
     const sequence = ++accountRequestSequence.current;
     const state = await fetchAccount(accountId);
-    if (sequence !== accountRequestSequence.current) return;
+    if (!billingActive.current || sequence !== accountRequestSequence.current) return;
     setAccount({
       pro: state.pro,
       planId: state.plan,
@@ -98,6 +120,7 @@ export default function App() {
   }, [accountId]);
 
   useEffect(() => {
+    if (!checkoutAvailable || !accountId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const params = new URLSearchParams(window.location.search);
@@ -107,16 +130,17 @@ export default function App() {
     const refresh = async () => {
       try {
         if (returningSession) await reconcileCheckout(returningSession).catch(() => {});
+        if (cancelled || !billingActive.current) return;
         const sequence = ++accountRequestSequence.current;
         const state = await fetchAccount(accountId);
-        if (!cancelled && sequence === accountRequestSequence.current) setAccount({
+        if (!cancelled && billingActive.current && sequence === accountRequestSequence.current) setAccount({
           pro: state.pro,
           planId: state.plan,
           credits: state.credits,
           pagesUsedThisCycle: state.pages_used_this_cycle,
         });
       } catch { /* conversion/checkout show their own actionable service errors */ }
-      if (!cancelled && --attempts > 0) timer = setTimeout(refresh, 2000);
+      if (!cancelled && billingActive.current && --attempts > 0) timer = setTimeout(refresh, 2000);
     };
     void refresh();
     const onFocus = () => void refreshAccount().catch(() => {});
@@ -126,30 +150,32 @@ export default function App() {
       if (timer) clearTimeout(timer);
       window.removeEventListener("focus", onFocus);
     };
-  }, [accountId, refreshAccount, reconcileCheckout]);
+  }, [accountId, checkoutAvailable, refreshAccount, reconcileCheckout]);
 
   const handleCheckout = async (sku: string) => {
-    if (sku === "free" || checkoutPending.current) return;
+    if (!billingActive.current || !accountId || sku === "free" || checkoutPending.current) return;
     checkoutPending.current = true;
     setCheckoutBusy(true);
-    setCheckoutError(null);
+    setCheckoutError(false);
     track("upgrade-click");
     try {
       const saved = checkoutSessions.current.get(sku) ?? savedCheckout(accountId, sku);
       if (saved) await reconcileCheckout(saved.sessionId);
+      if (!billingActive.current) return;
       let requestId = checkoutIntents.current.get(sku);
       if (!requestId) {
         requestId = checkoutRequestId(accountId, sku);
         checkoutIntents.current.set(sku, requestId);
       }
       const session = await openCheckout(accountId, sku, requestId);
+      if (!billingActive.current) return;
       const opened = { requestId, sessionId: session.session_id };
       checkoutSessions.current.set(sku, opened);
       rememberCheckout(accountId, sku, opened);
       track("checkout-opened");
       navigateCheckout(session.checkout_url);
-    } catch (error) {
-      setCheckoutError(error instanceof Error ? error.message : t.checkout_error);
+    } catch {
+      if (billingActive.current) setCheckoutError(true);
     } finally {
       checkoutPending.current = false;
       setCheckoutBusy(false);
@@ -158,15 +184,17 @@ export default function App() {
 
   return (
     <div className="app" id="top">
-      <Header />
-      <AccountChip account={account} />
+      <Header showPricing={checkoutAvailable} />
+      {checkoutAvailable && <AccountChip account={account} />}
       <main>
-        <Hero />
+        <Hero showPricing={checkoutAvailable} />
         <Features />
         <HowItWorks />
         <Converter accountId={accountId} onCharged={() => void refreshAccount().catch(() => {})} />
-        <Pricing onBuyPack={handleCheckout} onChoosePlan={handleCheckout} busy={checkoutBusy} />
-        {checkoutError && <p className="convert-error" role="alert">{checkoutError}</p>}
+        {checkoutAvailable && (
+          <Pricing onBuyPack={handleCheckout} onChoosePlan={handleCheckout} busy={checkoutBusy} />
+        )}
+        {checkoutAvailable && checkoutError && <p className="convert-error" role="alert">{t.checkout_error}</p>}
       </main>
       <footer className="site-footer">
         <p>{t.footer_tagline}</p>

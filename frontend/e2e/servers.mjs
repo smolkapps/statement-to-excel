@@ -53,13 +53,21 @@ async function launch(command, args, { cwd, env, port, readyPath = "/" }) {
   }
 }
 
-export async function startBackend() {
+export async function startBackend({ checkoutConfigured = false } = {}) {
   const port = await freePort();
   const directory = await mkdtemp(resolve(tmpdir(), "stx-e2e-"));
   try {
     const server = await launch(python, ["-m", "uvicorn", "statement_to_excel.api:app", "--host", "127.0.0.1", "--port", String(port)], {
       cwd: backendRoot,
-      env: { STX_BILLING_PROVIDER: "stripe", STX_BILLING_DATABASE: resolve(directory, "billing.sqlite3"), STX_STRIPE_SECRET_KEY: "", STX_STRIPE_WEBHOOK_SECRET: "" },
+      // Synthetic prefixes enable the metered UI contract only. They are not
+      // Stripe credentials; browser checkout requests are intercepted in tests.
+      env: {
+        STX_BILLING_PROVIDER: "stripe",
+        STX_BILLING_DATABASE: resolve(directory, "billing.sqlite3"),
+        STX_STRIPE_SECRET_KEY: checkoutConfigured ? "sk_test_SYNTHETIC_BROWSER_NOT_A_STRIPE_KEY" : "",
+        STX_STRIPE_WEBHOOK_SECRET: checkoutConfigured ? "whsec_SYNTHETIC_BROWSER_NOT_A_STRIPE_SECRET" : "",
+        STX_CHECKOUT_ORIGIN: "http://127.0.0.1:4174",
+      },
       port,
       readyPath: "/api/health",
     });
