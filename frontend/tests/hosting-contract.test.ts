@@ -11,16 +11,33 @@ describe("hosted converter disclosure", () => {
     es: /se sube a nuestro servidor/i,
     it: /caricato sul nostro server/i,
   };
+  const statementPrivacyTerms = {
+    en: /no statement data is stored/i,
+    zh: /不存储任何对账单数据/,
+    ja: /明細データは保存しません/,
+    es: /no se almacenan datos del extracto/i,
+    it: /non vengono memorizzati dati dell'estratto conto/i,
+  };
+  const immediateDeletionTerms = {
+    en: /deleted right after/i,
+    zh: /转换后立即删除/,
+    ja: /変換後すぐに削除/,
+    es: /se elimina inmediatamente después/i,
+    it: /eliminato subito dopo/i,
+  };
   for (const code of ["en", "zh", "ja", "es", "it"] as const) {
-    it(`${code} explains that the PDF leaves the browser for conversion`, () => {
+    it(`${code} promises no statement retention and immediate deletion after server conversion`, () => {
       expect(LOCALES[code].hero_trust).toMatch(serverTerms[code]);
+      expect(LOCALES[code].hero_trust).toMatch(statementPrivacyTerms[code]);
+      expect(LOCALES[code].hero_trust).toMatch(immediateDeletionTerms[code]);
     });
   }
   it("preserves no stored statement data and discloses server processing", () => {
     const en = LOCALES.en;
     expect([en.hero_trust, en.feature_private_title, en.feature_private_body].join(" "))
       .not.toMatch(/processed locally|never leaves your/i);
-    expect(en.hero_trust).toMatch(/no data is stored|statement data is never stored/i);
+    expect(en.hero_trust).toBe("No statement data is stored. Your PDF is uploaded to our server for conversion and deleted right after.");
+    expect(Object.values(en).join(" ")).not.toMatch(/no data is stored\./i);
     expect(en.feature_private_body).toContain("without sending your statement to a third-party AI API");
   });
 });

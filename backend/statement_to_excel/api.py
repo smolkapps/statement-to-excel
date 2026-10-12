@@ -13,7 +13,8 @@ Endpoints
 
 Conversion and output generation run locally in memory. Usage is charged only
 after successful output generation. Optional Idempotency-Key prevents repeat
-usage debits. Billing stores metadata only; test Checkout remains disabled until
+usage debits for 24 hours after creation; replay does not extend that window.
+Billing stores metadata only; test Checkout remains disabled until
 Stripe test credentials and signed webhooks are configured.
 """
 
@@ -29,6 +30,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from . import __version__
 from .billing import (
@@ -50,6 +52,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def purge_conversion_retry_metadata(request: Request, call_next):
+    """Clean conversion metadata even when multipart/schema validation fails."""
+    if request.method == "POST" and request.url.path == "/api/convert":
+        await run_in_threadpool(LEDGER.purge_conversion_charges)
+    return await call_next(request)
 
 
 # --------------------------------------------------------------------------- #

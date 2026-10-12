@@ -12,7 +12,7 @@ export const es: Translation = {
     "Contables, gestores y equipos financieros: dejen de teclear transacciones a mano. Suelten un PDF del extracto y obtengan una hoja de cálculo ordenada y exacta con cada fecha, concepto, importe y saldo.",
   hero_cta: "Convertir un extracto",
   hero_secondary_cta: "Ver precios",
-  hero_trust: "Los datos de tu extracto nunca se almacenan. Tu PDF se sube a nuestro servidor para convertirlo. Solo PDF con texto; los extractos escaneados necesitan OCR.",
+  hero_trust: "No se almacenan datos del extracto. Tu PDF se sube a nuestro servidor para convertirlo y se elimina inmediatamente después.",
 
   feature_accuracy_title: "Exacto, no aproximado",
   feature_accuracy_body:

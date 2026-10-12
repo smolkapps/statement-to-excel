@@ -12,7 +12,7 @@ export const zh: Translation = {
     "会计、记账与财务团队：不必再手工录入交易。上传一份对账单 PDF，即可得到整洁、精确的表格，包含每一笔的日期、摘要、金额和余额。",
   hero_cta: "转换对账单",
   hero_secondary_cta: "查看价格",
-  hero_trust: "您的对账单数据绝不存储。您的 PDF 会上传到我们的服务器进行转换。仅支持文本型 PDF；扫描件需要先进行 OCR。",
+  hero_trust: "不存储任何对账单数据。您的 PDF 会上传到我们的服务器进行转换，并在转换后立即删除。",
 
   feature_accuracy_title: "精确，而非近似",
   feature_accuracy_body:

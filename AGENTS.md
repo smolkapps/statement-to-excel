@@ -61,8 +61,10 @@ The historical July SPA fallthrough is not currently reproducible there.
 
 ## Privacy
 
-Preserve the site's **"No data is stored"** statement-data promise in all locales
-and its disclosure that the hosted UI uploads PDFs to this app's server.
+Preserve the site's **"No statement data is stored. Your PDF is uploaded to our
+server for conversion and deleted right after."** privacy copy in all locales.
+Account/credit records and limited idempotency metadata are stored; never claim
+that no data of any kind is stored.
 Process uploads and outputs in memory. Multipart temporary files must be closed
 and deleted in a `finally` block immediately after processing, including parse,
 validation, quota and writer failures; tests exercise actual rolled disk files.
@@ -73,7 +75,18 @@ customer information, secrets or generated runtime databases.
 
 Only anonymous account IDs, usage counters, opaque idempotency keys, one-way
 conversion fingerprints and payment/entitlement metadata enter the billing
-SQLite database. No document bytes or extracted transactions are saved. The
+SQLite database. Conversion idempotency rows include a SHA-256 fingerprint
+of the upload and conversion options and a fixed creation timestamp. Their
+retention window is **24 hours**; replays do not extend it. Every conversion
+POST opportunistically deletes rows older than 24 hours, including rejected
+requests. With no conversion traffic, removal of expired rows waits for the
+next request; expired keys nevertheless behave as new conversions and can debit usage again.
+The migration discards legacy fingerprint rows whose creation time is unknown,
+without changing account/credit balances or previous usage; those keys also
+behave as new requests. Checkout and payment entitlement records have independent
+retention and keep their existing durable idempotency guarantees.
+
+No document bytes or extracted transactions are saved. The
 existing single Umami tag receives only `file-selected`, `convert-success`,
 `convert-error`, `upgrade-click`, `checkout-opened`, without document/account data.
 

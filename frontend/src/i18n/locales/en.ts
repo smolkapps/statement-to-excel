@@ -12,7 +12,7 @@ export const en: Translation = {
     "Accountants, bookkeepers and finance teams: stop retyping transactions. Drop a statement PDF, get a tidy, exact spreadsheet with every date, description, amount and balance.",
   hero_cta: "Convert a statement",
   hero_secondary_cta: "See pricing",
-  hero_trust: "No data is stored. Your PDF is uploaded to our server for conversion. Text-based PDFs only; scanned statements need OCR.",
+  hero_trust: "No statement data is stored. Your PDF is uploaded to our server for conversion and deleted right after.",
 
   feature_accuracy_title: "Exact, not approximate",
   feature_accuracy_body:

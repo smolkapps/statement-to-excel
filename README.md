@@ -150,10 +150,25 @@ backend: production must route `/api/*` to a separately supervised ASGI service
 before the SPA fallback. The repository contains an nginx example, not the
 operator's actual production configuration.
 
-Uploads and converted rows are processed in memory. Multipart spill files are
-closed and deleted immediately in all success and failure paths. Only anonymous
-metering/idempotency and payment metadata is persisted; statement bytes and rows
-are never retained or sent to analytics.
+### Privacy
+
+No statement data is stored. Your PDF is uploaded to our server for conversion
+and deleted right after. Uploads and converted rows are processed in memory;
+multipart spill files are closed and deleted immediately in all success and
+failure paths. Statement bytes and extracted rows are never persisted or sent
+to analytics.
+
+Account/credit records and payment metadata are stored. For conversion retries,
+the service also stores a SHA-256 fingerprint of the upload and conversion
+options in an idempotency row with a **24-hour retention window**, measured from
+its creation; replaying it does not refresh the window. Every conversion POST
+purges rows older than 24 hours, including rejected requests. Cleanup is
+opportunistic: without conversion traffic, removal of expired rows waits for the
+next request. An expired key is treated as a new conversion and can consume usage
+again. On migration, legacy fingerprint rows with unknown creation times are
+discarded, while account/credit balances and historical usage remain unchanged.
+These expiry rules apply only to conversion retry records, not payment or Pro
+entitlement idempotency.
 
 ---
 

@@ -105,6 +105,10 @@ def _catalog_dict() -> dict:
 
 PRICING = _catalog_dict()
 
+# Conversion retries are a short-lived convenience, separate from the durable
+# purchase keys required to prevent duplicate financial payments.
+CONVERSION_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
+
 
 # --------------------------------------------------------------------------- #
 # Account state + metering
@@ -219,23 +223,35 @@ class Ledger:
             return acct
 
     def charge_pages_once(self, account_id: str, pages: int, key: str, fingerprint: str) -> dict:
-        """Debit one conversion retry group; retain metadata, never statements."""
+        """Debit a retry group once within 24 hours; never retain statements."""
         with self._lock:
+            self.purge_conversion_charges()
             prior = self._conversion_charges.get(key)
             if prior:
                 if prior[:2] != (account_id, fingerprint):
                     raise ValueError("Idempotency key belongs to another conversion.")
                 return dict(prior[2])
             charge = self.charge_pages(account_id, pages)
-            self._conversion_charges[key] = (account_id, fingerprint, dict(charge))
+            self._conversion_charges[key] = (account_id, fingerprint, dict(charge), time.time())
             return charge
 
     def conversion_charge(self, account_id: str, key: str, fingerprint: str):
         with self._lock:
+            self.purge_conversion_charges()
             prior = self._conversion_charges.get(key)
             if prior and prior[:2] != (account_id, fingerprint):
                 raise ValueError("Idempotency key belongs to another conversion.")
             return dict(prior[2]) if prior else None
+
+    def purge_conversion_charges(self) -> int:
+        """Opportunistic cleanup with no access-based extension of retention."""
+        with self._lock:
+            cutoff = time.time() - CONVERSION_IDEMPOTENCY_TTL_SECONDS
+            expired = [key for key, row in self._conversion_charges.items()
+                       if len(row) < 4 or row[3] < cutoff]
+            for key in expired:
+                del self._conversion_charges[key]
+            return len(expired)
 
 
 # --------------------------------------------------------------------------- #
@@ -290,7 +306,8 @@ class PersistentLedger(Ledger):
                 );
                 CREATE TABLE IF NOT EXISTS conversion_charges (
                     request_key TEXT PRIMARY KEY, account_id TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL, charge TEXT NOT NULL
+                    fingerprint TEXT NOT NULL, charge TEXT NOT NULL,
+                    created_at REAL NOT NULL
                 );
             """)
             # Local metadata schemas are forwards compatible across deploys.
@@ -298,6 +315,20 @@ class PersistentLedger(Ledger):
             if 'provider_key' not in columns:
                 db.execute("ALTER TABLE checkout_requests ADD COLUMN provider_key TEXT")
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS checkout_provider_key ON checkout_requests(provider_key)")
+            # Serialize migration across workers opening an old database. Old
+            # fingerprints have unknowable ages: expire them, never restart the
+            # retention clock. Existing usage debits and purchases stay intact.
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                columns = {row['name'] for row in db.execute("PRAGMA table_info(conversion_charges)")}
+                if 'created_at' not in columns:
+                    db.execute("ALTER TABLE conversion_charges ADD COLUMN created_at REAL")
+                db.execute("DELETE FROM conversion_charges WHERE created_at IS NULL")
+                db.execute("CREATE INDEX IF NOT EXISTS conversion_charges_created_at ON conversion_charges(created_at)")
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
 
     def connect(self):
         db = sqlite3.connect(self.database_path, timeout=30, isolation_level=None)
@@ -369,31 +400,56 @@ class PersistentLedger(Ledger):
             return self.read_account(db, account_id)
 
     def conversion_charge(self, account_id, key, fingerprint):
+        self.purge_conversion_charges()
+        try:
+            with self.transaction() as db:
+                self._purge_conversion_charges(db)
+                prior = db.execute("SELECT * FROM conversion_charges WHERE request_key=?", (key,)).fetchone()
+                if prior and (prior['account_id'], prior['fingerprint']) != (account_id, fingerprint):
+                    raise ValueError("Idempotency key belongs to another conversion.")
+                return json.loads(prior['charge']) if prior else None
+        except ValueError:
+            # Cleanup inside a rejected lookup rolled back with the transaction.
+            self.purge_conversion_charges()
+            raise
+
+    def purge_conversion_charges(self) -> int:
         with self.transaction() as db:
-            prior = db.execute("SELECT * FROM conversion_charges WHERE request_key=?", (key,)).fetchone()
-            if prior and (prior['account_id'], prior['fingerprint']) != (account_id, fingerprint):
-                raise ValueError("Idempotency key belongs to another conversion.")
-            return json.loads(prior['charge']) if prior else None
+            return self._purge_conversion_charges(db)
+
+    @staticmethod
+    def _purge_conversion_charges(db) -> int:
+        cutoff = time.time() - CONVERSION_IDEMPOTENCY_TTL_SECONDS
+        return db.execute("DELETE FROM conversion_charges WHERE created_at IS NULL OR created_at < ?", (cutoff,)).rowcount
 
     def charge_pages_once(self, account_id, pages, key, fingerprint):
+        self.purge_conversion_charges()
         if pages < 0:
             raise ValueError("pages must be >= 0")
-        with self.transaction() as db:
-            prior = db.execute("SELECT * FROM conversion_charges WHERE request_key=?", (key,)).fetchone()
-            if prior:
-                if (prior['account_id'], prior['fingerprint']) != (account_id, fingerprint):
-                    raise ValueError("Idempotency key belongs to another conversion.")
-                return json.loads(prior['charge'])
-            self.ensure_account(db, account_id)
-            acct = self.read_account(db, account_id)
-            quote = acct.quote(pages)
-            if not quote['sufficient']:
-                raise InsufficientCredits("insufficient credits")
-            db.execute("UPDATE accounts SET pages_used=pages_used+?,credits=credits-? WHERE id=?", (quote['from_included'], quote['from_credits'], account_id))
-            charge = dict(account=account_id, kind='charge', pages=pages,
-                          from_included=quote['from_included'], from_credits=quote['from_credits'], credits_after=quote['credits_after'])
-            db.execute("INSERT INTO conversion_charges VALUES (?,?,?,?)", (key, account_id, fingerprint, json.dumps(charge)))
-            return charge
+        try:
+            with self.transaction() as db:
+                # A concurrent operation may have held the lock across expiry.
+                self._purge_conversion_charges(db)
+                prior = db.execute("SELECT * FROM conversion_charges WHERE request_key=?", (key,)).fetchone()
+                if prior:
+                    if (prior['account_id'], prior['fingerprint']) != (account_id, fingerprint):
+                        raise ValueError("Idempotency key belongs to another conversion.")
+                    return json.loads(prior['charge'])
+                self.ensure_account(db, account_id)
+                acct = self.read_account(db, account_id)
+                quote = acct.quote(pages)
+                if not quote['sufficient']:
+                    raise InsufficientCredits("insufficient credits")
+                db.execute("UPDATE accounts SET pages_used=pages_used+?,credits=credits-? WHERE id=?", (quote['from_included'], quote['from_credits'], account_id))
+                charge = dict(account=account_id, kind='charge', pages=pages,
+                              from_included=quote['from_included'], from_credits=quote['from_credits'], credits_after=quote['credits_after'])
+                db.execute("INSERT INTO conversion_charges(request_key,account_id,fingerprint,charge,created_at) VALUES (?,?,?,?,?)", (key, account_id, fingerprint, json.dumps(charge), time.time()))
+                return charge
+        except (ValueError, InsufficientCredits):
+            # Keep privacy cleanup committed even when a quota/conflict failure
+            # rolls back an expiry that occurred while waiting for the lock.
+            self.purge_conversion_charges()
+            raise
 
 
 class BillingProvider:

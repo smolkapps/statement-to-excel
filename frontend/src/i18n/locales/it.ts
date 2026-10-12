@@ -12,7 +12,7 @@ export const it: Translation = {
     "Commercialisti, contabili e team finanziari: basta ridigitare le transazioni. Trascina un PDF dell'estratto conto e ottieni un foglio di calcolo ordinato e preciso con ogni data, descrizione, importo e saldo.",
   hero_cta: "Converti un estratto conto",
   hero_secondary_cta: "Vedi i prezzi",
-  hero_trust: "I dati dell'estratto conto non vengono mai memorizzati. Il PDF viene caricato sul nostro server per la conversione. Solo PDF con testo; gli estratti scansionati richiedono l'OCR.",
+  hero_trust: "Non vengono memorizzati dati dell'estratto conto. Il PDF viene caricato sul nostro server per la conversione ed eliminato subito dopo.",
 
   feature_accuracy_title: "Esatto, non approssimato",
   feature_accuracy_body:
