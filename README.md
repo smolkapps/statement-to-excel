@@ -143,7 +143,8 @@ Stripe test credentials and the webhook are configured**, with
 
 - **Checkout unavailable:** missing either an `sk_test_` secret key or a `whsec_`
   webhook secret means `checkout_available=false`. Conversion accepts any valid
-  page count under the 20 MiB limit, with all PDF validation and deletion intact.
+  statement up to 100 pages under the 20 MiB limit, with all PDF validation and
+  deletion intact.
   It consumes no allowance/credits, never returns 402, writes no account,
   conversion-charge or checkout rows, and returns
   `charge: {"metered": false, "pages": N}`. Expired-fingerprint cleanup may still
@@ -170,13 +171,26 @@ backend: production must route `/api/*` to a separately supervised ASGI service
 before the SPA fallback. The repository contains an nginx example, not the
 operator's actual production configuration.
 
+Both billing modes reject PDFs over **100 pages** with HTTP 413 before extracting
+transactions. Counting, parsing and output serialization run in a worker thread
+so a long conversion does not block the API's health endpoint.
+
 ### Privacy
 
 No statement data is stored. Your PDF is uploaded to our server for conversion
-and deleted right after. Uploads and converted rows are processed in memory;
-multipart spill files are closed and deleted immediately in all success and
-failure paths. Statement bytes and extracted rows are never persisted or sent
-to analytics.
+and deleted right after. Accepted uploads, converted rows and Excel worksheet
+XML/workbooks are processed in memory. The app's **21 MiB multipart spool
+threshold** exceeds its unchanged **20 MiB file limit**, so accepted PDFs never
+create temporary disk files. Uploads are closed immediately in all success and
+failure paths; oversized rejected or deliberately spooled files are deleted.
+Statement bytes and extracted rows are never persisted or sent to analytics.
+
+Production nginx must match `frontend/deploy/nginx.conf.example`: use
+`client_body_buffer_size 21m`, `proxy_request_buffering off` and
+`proxy_buffering off` for `/api/*`, including HTTP/1.1 and HTTP/2. Its
+`client_max_body_size 21m` allows multipart overhead around a 20 MiB PDF; the API
+still returns HTTP 413 for any file over 20 MiB. These settings must also be
+respected by any other production proxy.
 
 Account/credit records and payment metadata are stored in configured billing
 mode. Unmetered conversion creates no billing rows. For metered conversion

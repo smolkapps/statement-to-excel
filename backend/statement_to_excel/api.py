@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
+from starlette.formparsers import MultiPartParser
 
 from . import __version__
 from .billing import (
@@ -44,6 +45,13 @@ from .writers import to_csv_bytes, to_xlsx_bytes
 # transaction rows must never enter the ledger or provider.
 LEDGER = PersistentLedger(os.getenv("STX_BILLING_DATABASE", "var/billing.sqlite3"))
 PROVIDER = get_provider()
+
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_STATEMENT_PAGES = 100
+# Starlette's file parser uses this supported class setting when it constructs
+# SpooledTemporaryFile. Keep every accepted PDF in memory; oversized rejected
+# uploads can still spill and are closed/deleted by the cleanup below.
+MultiPartParser.spool_max_size = MAX_UPLOAD_BYTES + 1024 * 1024
 
 app = FastAPI(title="statement-to-excel", version=__version__)
 app.add_middleware(
@@ -151,14 +159,97 @@ def get_checkout_status(session_id: str, account_id: str) -> dict:
 
 
 def _count_pages(data: bytes) -> int:
-    """Count PDF pages cheaply via pdfplumber; default to 1 on failure."""
-    try:
-        import pdfplumber
+    """Count page metadata, stopping at the first page beyond the limit.
 
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            return max(1, len(pdf.pages))
+    Password/format failures are left to the converter's existing clear 422
+    errors. Iterate pdfminer's page metadata directly: pdfplumber.close() would
+    materialize the entire page list, defeating an early bounded count.
+    """
+    try:
+        from pdfminer.pdfpage import PDFPage
+
+        with io.BytesIO(data) as stream:
+            pages = sum(1 for _ in PDFPage.get_pages(stream, maxpages=MAX_STATEMENT_PAGES + 1))
+        return max(1, pages)
     except Exception:
         return 1
+
+
+def _convert_response(
+    data: bytes,
+    account_id: str,
+    fmt: str,
+    currency: str,
+    preview: bool,
+    idempotency_key: Optional[str],
+    metered: bool,
+    ledger,
+) -> Response:
+    """Run PDF work, output encoding and metering entirely in a worker thread."""
+    pages = _count_pages(data)
+    if pages > MAX_STATEMENT_PAGES:
+        raise HTTPException(status_code=413, detail="PDF statements are limited to 100 pages")
+
+    # Parse first; only charge on success.
+    try:
+        txns = convert_pdf(io.BytesIO(data), currency=currency)
+    except ConversionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    summary = summarize(txns).to_dict()
+    # Finish serialization first: failed output generation must not spend pages.
+    if fmt == "json":
+        body = None
+        media = "application/json"
+    elif fmt == "csv":
+        body = to_csv_bytes(txns)
+        media = "text/csv"
+    else:
+        body = to_xlsx_bytes(txns)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ext = fmt
+
+    charge = {"metered": False, "pages": pages}
+    if metered:
+        try:
+            if idempotency_key:
+                fingerprint = hashlib.sha256(data + b"\0" + fmt.encode() + b"\0" + currency.encode()).hexdigest()
+                charge = ledger.charge_pages_once(account_id, pages, idempotency_key, fingerprint)
+            else:
+                charge = ledger.charge_pages(account_id, pages)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except InsufficientCredits as exc:
+            acct = ledger.get_or_create(account_id)
+            return JSONResponse(status_code=402, content={
+                "error": "insufficient_credits", "detail": str(exc), "quote": acct.quote(pages),
+            })
+
+    if fmt == "json":
+        return JSONResponse(content={
+            "transactions": [t.to_dict() for t in txns],
+            "summary": summary, "charge": charge,
+        })
+
+    if preview:
+        return JSONResponse(
+            content={
+                "transactions": [t.to_dict() for t in txns],
+                "summary": summary,
+                "charge": charge,
+                "file_b64": base64.b64encode(body).decode("ascii"),
+                "filename": f"statement.{ext}",
+                "media_type": media,
+            }
+        )
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="statement.{ext}"',
+        "X-Transaction-Count": str(summary["count"]),
+    }
+    if metered:
+        headers["X-Credits-Remaining"] = str(charge["credits_after"])
+    return Response(content=body, media_type=media, headers=headers)
 
 
 @app.post("/api/convert")
@@ -180,76 +271,18 @@ async def convert(
         if fmt not in {"xlsx", "csv", "json"}:
             raise HTTPException(status_code=400, detail="fmt must be xlsx|csv|json")
 
-        data = await file.read(20 * 1024 * 1024 + 1)
-        if len(data) > 20 * 1024 * 1024:
+        data = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="PDF uploads are limited to 20 MiB")
         if not data:
             raise HTTPException(status_code=400, detail="empty upload")
 
         if idempotency_key is not None and not 16 <= len(idempotency_key) <= 200:
             raise HTTPException(status_code=400, detail="Idempotency-Key must be 16 to 200 characters")
-        pages = _count_pages(data)
-
-        # Parse first; only charge on success.
-        try:
-            txns = convert_pdf(io.BytesIO(data), currency=currency)
-        except ConversionError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-
-        summary = summarize(txns).to_dict()
-        # Finish serialization first: failed output generation must not spend pages.
-        if fmt == "json":
-            body = None
-            media = "application/json"
-        elif fmt == "csv":
-            body = to_csv_bytes(txns)
-            media = "text/csv"
-        else:
-            body = to_xlsx_bytes(txns)
-            media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ext = fmt
-
-        charge = {"metered": False, "pages": pages}
-        if metered:
-            try:
-                if idempotency_key:
-                    fingerprint = hashlib.sha256(data + b"\0" + fmt.encode() + b"\0" + currency.encode()).hexdigest()
-                    charge = LEDGER.charge_pages_once(account_id, pages, idempotency_key, fingerprint)
-                else:
-                    charge = LEDGER.charge_pages(account_id, pages)
-            except ValueError as exc:
-                raise HTTPException(status_code=409, detail=str(exc))
-            except InsufficientCredits as exc:
-                acct = LEDGER.get_or_create(account_id)
-                return JSONResponse(status_code=402, content={
-                    "error": "insufficient_credits", "detail": str(exc), "quote": acct.quote(pages),
-                })
-
-        if fmt == "json":
-            return JSONResponse(content={
-                "transactions": [t.to_dict() for t in txns],
-                "summary": summary, "charge": charge,
-            })
-
-        if preview:
-            return JSONResponse(
-                content={
-                    "transactions": [t.to_dict() for t in txns],
-                    "summary": summary,
-                    "charge": charge,
-                    "file_b64": base64.b64encode(body).decode("ascii"),
-                    "filename": f"statement.{ext}",
-                    "media_type": media,
-                }
-            )
-
-        headers = {
-            "Content-Disposition": f'attachment; filename="statement.{ext}"',
-            "X-Transaction-Count": str(summary["count"]),
-        }
-        if metered:
-            headers["X-Credits-Remaining"] = str(charge["credits_after"])
-        return Response(content=body, media_type=media, headers=headers)
+        return await run_in_threadpool(
+            _convert_response, data, account_id, fmt, currency, preview,
+            idempotency_key, metered, LEDGER,
+        )
     finally:
         # Starlette may spool larger multipart uploads to disk. Closing here
         # releases memory and deletes the spill before any response is sent.

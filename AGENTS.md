@@ -53,6 +53,13 @@ For production, the hosting reverse proxy must forward `/api/*` to the API
 operator's actual paths. If services use separate origins, build with
 `VITE_API_BASE` and configure the API's allowed origins appropriately.
 
+Production nginx **must match** the example's `/api/*` privacy settings:
+`client_body_buffer_size 21m`, `proxy_request_buffering off` and
+`proxy_buffering off`, for both HTTP/1.1 and HTTP/2. The 21 MiB
+`client_max_body_size` accommodates the multipart envelope; the API's file limit
+remains **20 MiB**, with HTTP 413 for larger PDFs. Do not install an additional
+proxy that writes accepted request bodies or conversion responses to disk.
+
 The repository does not identify the actual backend machine, process manager,
 service unit, TLS termination, active reverse-proxy configuration or the external
 autodeploy job's settings. Do not guess or claim this example is installed.
@@ -66,10 +73,14 @@ Preserve the site's **"No statement data is stored. Your PDF is uploaded to our
 server for conversion and deleted right after."** privacy copy in all locales.
 Account/credit records and limited idempotency metadata are stored; never claim
 that no data of any kind is stored.
-Process uploads and outputs in memory. Multipart temporary files must be closed
-and deleted in a `finally` block immediately after processing, including parse,
-validation, quota and writer failures; tests exercise actual rolled disk files.
-The proxy must disable request/response disk buffering for `/api/*`. Never log,
+Process accepted uploads and outputs in memory. This app sets Starlette's
+multipart spool threshold to **21 MiB**, above its **20 MiB** file limit, so
+accepted uploads never roll onto disk. Excel worksheet XML and the resulting
+workbook also stay in memory. Close uploads in a `finally` block immediately
+after processing, including parse, validation, quota and writer failures; any
+oversized rejected or forcibly spooled upload must be deleted. Tests verify
+real 5 MiB multipart uploads in every format create no temporary file, the
+20 MiB boundary, and deletion of deliberately rolled files. Never log,
 persist, send to analytics or include in payment metadata PDF contents, filenames,
 transaction rows, balances or descriptions. Never commit real statements,
 customer information, secrets or generated runtime databases.
@@ -97,6 +108,10 @@ transaction pages require OCR first. Statements with detected distinct account
 headers must be split by account; never silently merge account balance chains.
 The accuracy suite checks exact complete ordered rows, including missing/extra
 rows and signs, and requires 100% for its known synthetic ground truth.
+The API rejects statements over **100 pages** with HTTP 413 before transaction
+extraction, in both billing modes. Page counting, PDF parsing, output writing
+and serialization run in a worker thread so a conversion does not block health
+requests on the event loop.
 
 ## Billing
 
@@ -112,8 +127,9 @@ The service has two modes, controlled by the Stripe provider's single
 - **Checkout unavailable:** production runs with `STX_BILLING_PROVIDER=stripe`
   and remains **unmetered until Stripe test credentials and the webhook are
   configured**. Missing either an `sk_test_` secret key or a `whsec_` webhook
-  secret makes `checkout_available=false`. Any valid page count converts with
-  the same 20 MiB upload limit, PDF validation, output formats and upload deletion.
+  secret makes `checkout_available=false`. Valid statements up to 100 pages
+  convert with the same 20 MiB upload limit, PDF validation, output formats and
+  upload deletion.
   Conversion returns `charge: {"metered": false, "pages": N}` and never consumes
   allowance/credits or returns 402. Requests write no account, conversion-charge
   or checkout rows; cleanup of previously expired fingerprints may still run.

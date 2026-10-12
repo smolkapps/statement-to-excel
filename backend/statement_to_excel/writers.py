@@ -67,8 +67,12 @@ def to_xlsx_bytes(txns: Sequence[Transaction]) -> bytes:
     Requires the ``openpyxl`` dependency (a hard dependency of this package).
     """
     from openpyxl import Workbook
+    from openpyxl.drawing.spreadsheet_drawing import SpreadsheetDrawing
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet._writer import WorksheetWriter
+    from openpyxl.writer.excel import ExcelWriter
+    from zipfile import ZIP_DEFLATED, ZipFile
 
     wb = Workbook()
     ws = wb.active
@@ -145,6 +149,23 @@ def to_xlsx_bytes(txns: Sequence[Transaction]) -> bytes:
     ws2.column_dimensions["A"].width = 16
     ws2.column_dimensions["B"].width = 18
 
+    class MemoryExcelWriter(ExcelWriter):
+        """Keep worksheet XML in memory instead of openpyxl's temp files."""
+
+        def write_worksheet(self, worksheet):
+            worksheet._drawing = SpreadsheetDrawing()
+            worksheet._drawing.charts = worksheet._charts
+            worksheet._drawing.images = worksheet._images
+            with io.BytesIO() as xml:
+                writer = WorksheetWriter(worksheet, out=xml)
+                writer.write()
+                worksheet._rels = writer._rels
+                self._archive.writestr(worksheet.path[1:], writer.read())
+                self.manifest.append(worksheet)
+
     out = io.BytesIO()
-    wb.save(out)
+    # Workbook.save(BytesIO()) still creates a disk-backed XML file per sheet.
+    # This per-conversion writer avoids that without mutating openpyxl globals.
+    with ZipFile(out, "w", ZIP_DEFLATED, allowZip64=True) as archive:
+        MemoryExcelWriter(wb, archive).save()
     return out.getvalue()
