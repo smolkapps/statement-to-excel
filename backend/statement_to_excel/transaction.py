@@ -36,12 +36,16 @@ class Transaction:
     balance: Optional[Decimal] = None
     currency: str = "USD"
     type: str = field(default="")
+    # Parsing provenance is kept out of the six-column CSV/transaction contract.
+    flags: tuple[str, ...] = field(default_factory=tuple)
+    category: str = ""
 
     def __post_init__(self) -> None:
         if self.amount is not None and not isinstance(self.amount, Decimal):
             self.amount = Decimal(str(self.amount))
         if self.balance is not None and not isinstance(self.balance, Decimal):
             self.balance = Decimal(str(self.balance))
+        self.flags = tuple(dict.fromkeys(self.flags))
         self.description = (self.description or "").strip()
         if not self.type:
             self.type = (

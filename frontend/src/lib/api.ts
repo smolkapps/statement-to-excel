@@ -39,10 +39,29 @@ export interface UnmeteredChargeInfo {
 
 export type ChargeInfo = MeteredChargeInfo | UnmeteredChargeInfo;
 
+export type ReconciliationStatus = "balanced" | "not_balanced" | "cannot_check";
+export type RowFlag = "year_inferred_rollover" | "sign_from_balance" | "multiline_description";
+export type ReconciliationTerm = "opening" | "money_in" | "money_out" | "closing"
+  | "previous" | "payments_credits" | "purchases" | "fees" | "interest" | "new";
+
+export interface Reconciliation {
+  status: ReconciliationStatus;
+  account_type: "deposit" | "card" | "unknown";
+  terms: Partial<Record<ReconciliationTerm, string | null>>;
+  printed_totals: Partial<Record<ReconciliationTerm, string | null>>;
+  difference: string | null;
+  check_differences?: Record<string, string | null>;
+  row_flags: { row_index: number; flags: RowFlag[] }[];
+}
+
 export interface ConvertJsonResult {
   transactions: TransactionRow[];
   summary: Summary;
   charge?: ChargeInfo;
+  // Optional for compatibility with older responses: the UI then says it
+  // cannot check, rather than treating missing evidence as a successful check.
+  reconciliation?: Reconciliation;
+  layout?: string;
 }
 
 export type OutputFormat = "xlsx" | "csv" | "json";

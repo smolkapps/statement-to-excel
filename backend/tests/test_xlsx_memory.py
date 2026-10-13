@@ -30,7 +30,7 @@ def test_xlsx_without_temporary_files_preserves_cells_and_formatting(monkeypatch
         Transaction("2024-01-08", "=SYNTHETIC_LITERAL_TEXT", Decimal("-84.21"), Decimal("5165.79")),
     ]
     workbook = load_workbook(BytesIO(to_xlsx_bytes(txns)))
-    assert workbook.sheetnames == ["Transactions", "Summary"]
+    assert workbook.sheetnames == ["Transactions", "Summary", "Checks"]
     sheet = workbook["Transactions"]
     assert list(sheet.values) == [
         ("Date", "Description", "Amount", "Balance", "Currency", "Type"),
@@ -69,3 +69,17 @@ def test_parallel_xlsx_conversions_keep_rows_isolated_without_temporary_files(mo
     with ThreadPoolExecutor(max_workers=4) as workers:
         rows = list(workers.map(convert, range(12)))
     assert rows == [(f"SYNTHETIC ACCOUNT {index}", index) for index in range(12)]
+
+
+def test_flag_comments_and_checks_never_create_temporary_files(monkeypatch):
+    _forbid_temporary_files(monkeypatch)
+    transaction = Transaction(
+        "2024-01-05", "Synthetic flagged transaction", Decimal("-5.00"),
+        flags=("year_inferred_rollover", "multiline_description"),
+    )
+    workbook = load_workbook(BytesIO(to_xlsx_bytes([transaction])))
+    comment = workbook["Transactions"]["B2"].comment
+    assert comment is not None
+    assert "December–January" in comment.text
+    assert "joined from several printed lines" in comment.text
+    assert workbook["Checks"]["B3"].value == "cannot_check"

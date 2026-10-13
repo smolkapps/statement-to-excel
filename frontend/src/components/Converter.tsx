@@ -5,8 +5,10 @@ import {
   convertStatement,
   type ConvertJsonResult,
   type OutputFormat,
+  type RowFlag,
 } from "../lib/api";
-import { track } from "../lib/analytics";
+import { conversionLayout, track } from "../lib/analytics";
+import { formatStatementMoney, reconciliationDifference, reconciliationStatus } from "../lib/reconciliation";
 
 const CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CNY", "CHF", "CAD", "AUD"];
 
@@ -71,7 +73,11 @@ export function Converter({ accountId, onCharged }: Props) {
         currency,
       });
       setResult(result);
-      track("convert-success");
+      const status = reconciliationStatus(result.reconciliation);
+      track("convert-success", {
+        balanced: status === "balanced" ? "yes" : status === "not_balanced" ? "no" : "unknown",
+        layout: conversionLayout(result.layout),
+      });
       if (result.charge && result.charge.metered !== false) {
         onCharged?.(result.charge.pages);
       }
@@ -182,10 +188,40 @@ export function Converter({ accountId, onCharged }: Props) {
 }
 
 function ResultsTable({ result }: { result: ConvertJsonResult }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const s = result.summary;
+  const reconciliation = result.reconciliation;
+  const status = reconciliationStatus(reconciliation);
+  const money = (value: string) => formatStatementMoney(value, s.currency, locale);
+  let statusLine = t.reconciliation_cannot_check;
+  if (reconciliation && status === "balanced") {
+    const template = reconciliation.account_type === "card"
+      ? t.reconciliation_balanced_card : t.reconciliation_balanced_deposit;
+    statusLine = template.replace(/\{(\w+)\}/g, (_, key: string) =>
+      money(reconciliation.terms[key as keyof typeof reconciliation.terms]!));
+  } else if (reconciliation && status === "not_balanced") {
+    statusLine = t.reconciliation_not_balanced.replace("{difference}", money(reconciliationDifference(reconciliation)!));
+  }
+  const flagLabels: Record<RowFlag, string> = {
+    year_inferred_rollover: t.row_flag_year_inferred_rollover,
+    sign_from_balance: t.row_flag_sign_from_balance,
+    multiline_description: t.row_flag_multiline_description,
+  };
+  const rowNotes = new Map<number, string>();
+  if (status === "not_balanced" && Array.isArray(reconciliation?.row_flags)) {
+    for (const row of reconciliation.row_flags) {
+      if (!row || !Number.isInteger(row.row_index) || !Array.isArray(row.flags)) continue;
+      const note = row.flags.map((flag) => flagLabels[flag]).filter(Boolean).join(" ");
+      if (note) rowNotes.set(row.row_index, note);
+    }
+  }
+  // Include later suspect rows as well as the usual first 50, retaining the
+  // original row index so a warning remains useful for multi-page statements.
+  const previewRows = result.transactions.map((row, index) => ({ row, index }))
+    .filter(({ index }) => index < 50 || rowNotes.has(index));
   return (
     <div className="results">
+      <p className={`reconciliation-status ${status}`} role="status" data-status={status}>{statusLine}</p>
       <div className="summary-strip">
         <span>
           <strong>{s.count}</strong> {t.summary_count}
@@ -212,10 +248,13 @@ function ResultsTable({ result }: { result: ConvertJsonResult }) {
             </tr>
           </thead>
           <tbody>
-            {result.transactions.slice(0, 50).map((row, i) => (
-              <tr key={i}>
+            {previewRows.map(({ row, index: i }) => (
+              <tr key={i} className={rowNotes.has(i) ? "flagged-row" : undefined} title={rowNotes.get(i)}>
                 <td>{row.date}</td>
-                <td>{row.description}</td>
+                <td>
+                  {row.description}
+                  {rowNotes.has(i) && <small className="row-flag-note">{rowNotes.get(i)}</small>}
+                </td>
                 <td className={`num ${row.type}`}>{row.amount}</td>
                 <td className="num">{row.balance ?? ""}</td>
               </tr>

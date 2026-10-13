@@ -49,6 +49,13 @@ export const zh: Translation = {
   summary_debit: "借方合计",
   summary_credit: "贷方合计",
   summary_net: "净额",
+  reconciliation_balanced_deposit: "已核对：期初余额 {opening} + 收入 {money_in} − 支出 {money_out} = 期末余额 {closing}，与您的对账单一致。",
+  reconciliation_balanced_card: "已核对：上期余额 {previous} − 还款及退款 {payments_credits} + 消费 {purchases} + 费用 {fees} + 利息 {interest} = 本期余额 {new}，与您的对账单一致。",
+  reconciliation_not_balanced: "金额不符：相差 {difference}。请检查突出显示的交易行。",
+  reconciliation_cannot_check: "无法核对：未找到此对账单的合计金额。使用前请自行核对数字。",
+  row_flag_year_inferred_rollover: "年份根据跨越十二月至一月的账期推断。",
+  row_flag_sign_from_balance: "金额正负号根据余额变化推断。",
+  row_flag_multiline_description: "摘要由多行文字合并而成。",
 
   pricing_title: "为企业打造的价格",
   pricing_subtitle:

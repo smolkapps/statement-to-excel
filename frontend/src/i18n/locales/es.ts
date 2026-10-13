@@ -49,6 +49,13 @@ export const es: Translation = {
   summary_debit: "Total cargos",
   summary_credit: "Total abonos",
   summary_net: "Neto",
+  reconciliation_balanced_deposit: "Cuadra: saldo inicial {opening} + entradas {money_in} − salidas {money_out} = saldo final {closing}, que coincide con tu extracto.",
+  reconciliation_balanced_card: "Cuadra: saldo anterior {previous} − pagos y abonos {payments_credits} + compras {purchases} + comisiones {fees} + intereses {interest} = nuevo saldo {new}, que coincide con tu extracto.",
+  reconciliation_not_balanced: "No cuadra: la diferencia es {difference}. Revisa las filas resaltadas.",
+  reconciliation_cannot_check: "No se puede comprobar: no encontramos los totales de este extracto. Compara los números antes de usarlos.",
+  row_flag_year_inferred_rollover: "Año deducido de un período entre diciembre y enero.",
+  row_flag_sign_from_balance: "Signo del importe deducido del cambio de saldo.",
+  row_flag_multiline_description: "Concepto formado al unir varias líneas.",
 
   pricing_title: "Precios pensados para empresas",
   pricing_subtitle:

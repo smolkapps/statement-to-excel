@@ -14,7 +14,7 @@ test.beforeAll(() => {
 from pathlib import Path
 from reportlab.lib.pdfencrypt import StandardEncryption
 from tests.test_pdf_edges import _pdf, _text_page
-from tests.accuracy_harness import LAYOUTS, render
+from tests.accuracy_harness import CARD_LAYOUTS, LAYOUTS, render
 directory = Path('../work/e2e-fixtures')
 directory.mkdir(parents=True, exist_ok=True)
 (directory / 'protected.pdf').write_bytes(_pdf(_text_page, encrypt=StandardEncryption('synthetic-fixture-password')).getvalue())
@@ -24,6 +24,10 @@ def multiple(c):
     _text_page(c, account='xxxx2222')
 (directory / 'multiple-accounts.pdf').write_bytes(_pdf(multiple).getvalue())
 render(next(layout for layout in LAYOUTS if layout.slug == 'wells-fargo'), directory)
+render(next(layout for layout in CARD_LAYOUTS if layout.slug == 'capital-one-card'), directory)
+from tests.test_reconciliation_api import synthetic_statement
+for name, options in [('reconciled', {}), ('off-by-one', {'closing': '111.00'}), ('without-totals', {'totals': False})]:
+    (directory / f'{name}.pdf').write_bytes(synthetic_statement(**options))
 `], { cwd: resolve("../backend"), encoding: "utf8" });
   expect(generated.status, generated.stderr).toBe(0);
 });
@@ -33,8 +37,13 @@ async function visit(page: Page) {
   await page.route("https://umami.smolkin.org/**", (route) => route.abort());
   await page.addInitScript(() => {
     const events: string[] = [];
+    const properties: unknown[] = [];
     Object.defineProperty(window, "testAnalyticsEvents", { value: events });
-    Object.defineProperty(window, "umami", { value: { track: (event: string) => events.push(event) } });
+    Object.defineProperty(window, "testAnalyticsProperties", { value: properties });
+    Object.defineProperty(window, "umami", { value: { track: (event: string, data?: unknown) => {
+      events.push(event);
+      if (event === "convert-success") properties.push(data);
+    } } });
   });
   await page.goto("/");
   // Await the configured capability response before testing metered conversion.
@@ -75,7 +84,7 @@ from decimal import Decimal
 from openpyxl import load_workbook
 expected = json.load(open(sys.argv[2]))
 wb = load_workbook(sys.argv[1], data_only=True)
-assert wb.sheetnames == ['Transactions', 'Summary']
+assert wb.sheetnames == ['Transactions', 'Summary', 'Checks']
 rows = list(wb['Transactions'].iter_rows(min_row=2, values_only=True))
 assert len(rows) == len(expected)
 for actual, want in zip(rows, expected):
@@ -98,6 +107,7 @@ print(f'{len(rows)} workbook rows verified')
   expect((await account(page)).pages_used_this_cycle).toBe(1);
   const events = await page.evaluate(() => (window as unknown as { testAnalyticsEvents: string[] }).testAnalyticsEvents);
   expect(events).toEqual(["file-selected", "convert-success"]);
+  await expect(page.locator(".reconciliation-status")).toContainText("Can't check:");
 });
 
 test("an image-only PDF returns an actionable OCR error without a download or page charge", async ({ page }) => {
@@ -192,4 +202,63 @@ test("a failed configured checkout rejects a double click and retries its intent
   expect(await account(page)).toMatchObject({ plan: "free", pro: false, credits: 0, pages_used_this_cycle: 0 });
   const events = await page.evaluate(() => (window as unknown as { testAnalyticsEvents: string[] }).testAnalyticsEvents);
   expect(events).toEqual(["upgrade-click", "upgrade-click"]);
+});
+
+for (const scenario of [
+  { filename: "reconciled.pdf", status: "balanced", balanced: "yes", english: "Balanced:", flags: false },
+  { filename: "off-by-one.pdf", status: "not_balanced", balanced: "no", english: "Doesn't balance:", flags: true },
+  { filename: "without-totals.pdf", status: "cannot_check", balanced: "unknown", english: "Can't check:", flags: false },
+]) {
+  test(`${scenario.status} shows printed-evidence status in every locale with restricted analytics`, async ({ page }) => {
+    await visit(page);
+    await page.getByLabel("Output format").selectOption("json");
+    await page.locator('input[type="file"]').setInputFiles(edgeFixture(scenario.filename));
+    const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/convert");
+    const downloadPromise = page.waitForEvent("download");
+    await page.locator(".convert-controls").getByRole("button", { name: "Convert", exact: true }).click();
+    const response = await responsePromise;
+    expect(response.status()).toBe(200);
+    expect((await response.json()).reconciliation.status).toBe(scenario.status);
+    expect((await downloadPromise).suggestedFilename()).toBe("statement.json");
+    const line = page.locator(".reconciliation-status");
+    await expect(line).toContainText(scenario.english);
+    if (scenario.status === "balanced") await expect(line).toContainText("$110.00");
+    if (scenario.status === "not_balanced") await expect(line).toContainText("$1.00");
+    const translations = new Set<string>();
+    for (const locale of ["en", "zh", "ja", "es", "it"]) {
+      await page.getByLabel("Select language").selectOption(locale);
+      await expect(line).toBeVisible();
+      translations.add((await line.textContent())!);
+      await expect(page.locator(".results tbody tr.flagged-row")).toHaveCount(scenario.flags ? 2 : 0);
+    }
+    expect(translations.size).toBe(5);
+    const properties = await page.evaluate(() => (window as unknown as { testAnalyticsProperties: unknown[] }).testAnalyticsProperties);
+    expect(properties).toEqual([{ balanced: scenario.balanced, layout: "deposit_lines" }]);
+  });
+}
+
+test("credit-card preview uses the card equation and downloaded Checks formulas", async ({ page }, testInfo) => {
+  await visit(page);
+  await page.locator('input[type="file"]').setInputFiles(edgeFixture("capital-one-card.pdf"));
+  const responsePromise = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/convert");
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator(".convert-controls").getByRole("button", { name: "Convert", exact: true }).click();
+  const result = await (await responsePromise).json();
+  expect(result.reconciliation).toMatchObject({ status: "balanced", account_type: "card" });
+  await expect(page.locator(".reconciliation-status")).toContainText("Balanced: previous");
+  await expect(page.locator(".reconciliation-status")).toContainText("payments and credits");
+  const path = testInfo.outputPath("synthetic-card.xlsx");
+  await (await downloadPromise).saveAs(path);
+  const checked = spawnSync(python, ["-c", `
+import sys
+from openpyxl import load_workbook
+workbook = load_workbook(sys.argv[1])
+assert workbook['Checks']['B9'].data_type == 'f'
+assert workbook['Checks']['B9'].value == '=IF(ISNUMBER(C4),B4-B5+B6+B7+B8,"")'
+assert workbook['Checks']['B3'].value == 'balanced'
+`, path], { encoding: "utf8" });
+  expect(checked.status, checked.stderr).toBe(0);
+  expect((await account(page)).pages_used_this_cycle).toBe(1);
+  const properties = await page.evaluate(() => (window as unknown as { testAnalyticsProperties: unknown[] }).testAnalyticsProperties);
+  expect(properties).toEqual([{ balanced: "yes", layout: "card_lines" }]);
 });

@@ -40,7 +40,8 @@ statement-to-excel/
 │   │   ├── parsers.py           # robust date / amount parsing
 │   │   ├── transaction.py       # the normalized Transaction model (Decimal)
 │   │   ├── engine.py            # PDF/text -> transactions (table + line strategies)
-│   │   ├── writers.py           # CSV / JSON / styled XLSX (+ summary sheet)
+│   │   ├── reconciliation.py    # pure Decimal checks against printed totals
+│   │   ├── writers.py           # CSV / JSON / XLSX (Summary + Checks sheets)
 │   │   ├── billing.py           # durable metering + Stripe test Checkout
 │   │   ├── api.py               # FastAPI app (upload -> metered conversion)
 │   │   └── cli.py               # `stx statement.pdf -o out.xlsx`
@@ -124,6 +125,37 @@ exact values; XLSX uses real numeric/date cells.
 **Out of scope:** scanned / image-only PDFs. The tool raises a clear error
 (rather than emitting garbage) so you know to run OCR first.
 
+### Reconciliation status
+
+Results show one status in English, Chinese, Japanese, Spanish or Italian:
+
+- **Balanced:** parsed rows agree exactly in Decimal with the printed totals.
+  Deposit accounts use opening + money in - money out = closing; cards use
+  previous - payments and credits + purchases + fees + interest = new balance.
+  Every printed subtotal found must agree too. Deposit checks require opening
+  and closing; card checks require all six terms, including explicitly printed
+  zero fees or interest.
+- **Doesn't balance:** a check fails. JSON includes the signed
+  calculated-minus-printed closing difference and individual check differences.
+  Review the highlighted rows: their year crossed December/January, their sign
+  came from a balance change, or their description joined several lines.
+- **Can't check:** required totals could not be found. Compare the numbers
+  before using the output. Missing printed figures never become assumed zeros.
+
+The reconciliation function takes only parsed rows and extracted totals, so it
+can be reused outside PDF parsing. JSON downloads and API previews include
+`reconciliation` (`status`, `account_type`, `terms`, `printed_totals`,
+`difference`, `check_differences`, `row_flags`) and a coarse `layout` ID. Row
+indices are zero-based. CSV retains its original six columns. XLSX adds a
+`Checks` sheet with live formulas referencing transaction cells and printed
+comparison figures; flagged rows carry cell notes. Excel recalculates these
+formulas when opened. Workbook generation remains entirely in memory, with
+`openpyxl>=3.1,<3.2` pinned for its internal writer API.
+
+A balanced equation supports checking extracted cash flow, but cannot prove
+every date or description is right or detect all equal and opposite mistakes.
+The corpus gates below compare every row independently of reconciliation.
+
 ---
 
 ## Monetization model
@@ -185,6 +217,10 @@ create temporary disk files. Uploads are closed immediately in all success and
 failure paths, with cleanup shielded from request cancellation; oversized
 rejected or deliberately spooled files are deleted.
 Statement bytes and extracted rows are never persisted or sent to analytics.
+The existing Umami `convert-success` event receives only `balanced`
+(`yes` / `no` / `unknown`) and coarse `layout` (`deposit_table`, `deposit_lines`,
+`card_table`, `card_lines`, `unknown`) properties. Amounts, dates, names,
+descriptions, file names and account IDs are never analytics properties.
 
 Production nginx must match `frontend/deploy/nginx.conf.example`: use
 `client_body_buffer_size 21m`, `proxy_request_buffering off` and
@@ -219,10 +255,13 @@ cd backend && . .venv/bin/activate
 pip install -e ".[test]"
 python tests/make_fixtures.py     # (re)generate fixtures (also auto-built by conftest)
 pytest
+python -m tests.accuracy_harness --output ../work/accuracy
 
 # Frontend
 cd frontend && npm install
 npm test                          # Vitest suites
+npm run build
+npm run test:routing               # real dev and production-preview HTTP paths
 npm run test:e2e                   # headless Chromium against real API
 ```
 
@@ -230,9 +269,25 @@ What's covered: exact-equality parsing on a clean ruled fixture; field-accuracy
 on messier borderless/credit-card fixtures; the OCR-only error path; every output
 writer; durable metering, signed webhooks, duplicate/concurrent/restarted checkout and purchase flows; the API end-to-end via
 Starlette's `TestClient` (including 402 insufficient-credits and 422 unparseable
-paths); 10 bank-inspired synthetic layouts with a strict 100% complete-row gate; and on the frontend, locale parity (no missing/stray/empty keys, real
+paths); bank-inspired synthetic layouts with a strict 100% complete-row gate; and on the frontend, locale parity (no missing/stray/empty keys, real
 translations), pricing math, the localStorage account store, the API form
 builder, and a React component render + interaction test.
+
+The harness keeps the ten original deposit layouts and adds Chase, Citi,
+Capital One and American Express-inspired card families. All data is invented.
+It exercises posting and transaction dates, separate payments/fees/interest,
+December-to-January periods, joined descriptions, repeated headers across page
+breaks, no activity, overdrafts, million-dollar amounts and a 40-page statement
+under the unchanged 100-page cap.
+
+Its per-family report includes balance rate, exact ordered rows (including
+dates, signed amounts and balances), missing/extra rows, **silent errors**
+(`balanced` while any extracted row is wrong), and **false alarms** (correct
+statements shown `not_balanced`). Required gates are 100% exact rows for every
+synthetic layout, **0 silent errors** and **0 false alarms**. These figures measure
+synthetic regression coverage, not accuracy on customers' real statements.
+The verification record for this change is
+[docs/codex-run-2026-10-13.md](docs/codex-run-2026-10-13.md).
 
 > Build & test are run on a Linux host; see the offload note in development.
 

@@ -51,6 +51,13 @@ export interface Translation {
   summary_debit: string;
   summary_credit: string;
   summary_net: string;
+  reconciliation_balanced_deposit: string;
+  reconciliation_balanced_card: string;
+  reconciliation_not_balanced: string;
+  reconciliation_cannot_check: string;
+  row_flag_year_inferred_rollover: string;
+  row_flag_sign_from_balance: string;
+  row_flag_multiline_description: string;
 
   // pricing
   pricing_title: string;

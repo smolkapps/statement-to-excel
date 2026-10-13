@@ -108,7 +108,7 @@ def _assert_download(data, fmt):
         return
     workbook = load_workbook(io.BytesIO(data), data_only=True)
     try:
-        assert workbook.sheetnames == ["Transactions", "Summary"]
+        assert workbook.sheetnames == ["Transactions", "Summary", "Checks"]
         rows = list(workbook["Transactions"].values)
         assert rows[0] == ("Date", "Description", "Amount", "Balance", "Currency", "Type")
         assert len(rows) == 11

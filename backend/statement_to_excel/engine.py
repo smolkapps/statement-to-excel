@@ -29,8 +29,19 @@ from typing import List, Optional, Sequence
 
 from .parsers import looks_like_amount, looks_like_date, parse_amount, parse_date
 from .transaction import Transaction
+from .reconciliation import Reconciliation, reconcile
 
-__all__ = ["convert_text", "convert_pdf", "ConversionError", "StatementSummary"]
+__all__ = ["convert_text", "convert_pdf", "ConversionError", "StatementSummary",
+           "StatementTransactions", "extract_totals"]
+
+
+class StatementTransactions(list[Transaction]):
+    """A backwards-compatible transaction list with statement-level evidence."""
+
+    def __init__(self, rows, *, reconciliation: Reconciliation, layout: str):
+        super().__init__(rows)
+        self.reconciliation = reconciliation
+        self.layout = layout
 
 
 class ConversionError(Exception):
@@ -86,7 +97,7 @@ def summarize(txns: Sequence[Transaction], currency: str = "USD") -> StatementSu
 # --------------------------------------------------------------------------- #
 # Year inference (for "Mon DD" style statements that omit the year per-row)
 # --------------------------------------------------------------------------- #
-_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+_YEAR_RE = re.compile(r"(?<![\d.,])\b(19|20)\d{2}\b(?![.,]\d)")
 _ACCOUNT_HEADER_RE = re.compile(
     r"^\s*(?:(?:checking|savings|credit\s+card)\s+)?account\s*"
     r"(?:number|no\.?|#|ending(?:\s+in)?)?\s*[:#]?\s*"
@@ -125,6 +136,183 @@ def _infer_dayfirst(text: str) -> bool:
     return False
 
 
+_FULL_DATE_TOKEN = (r"(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
+                    r"|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}"
+                    r"|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}"
+                    r"|\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4})")
+
+
+def _statement_period(text: str, dayfirst: bool) -> Optional[tuple[str, str]]:
+    """Read an explicit header period, rather than guessing from transaction years."""
+    for line in text.splitlines():
+        if not re.search(r"period|cycle|statement\s+(?:dates|from)|\bthrough\b", line, re.I):
+            continue
+        dates = [parse_date(match.group(), dayfirst=dayfirst)
+                 for match in re.finditer(_FULL_DATE_TOKEN, line)]
+        dates = [date for date in dates if date]
+        if len(dates) >= 2 and dates[0] <= dates[1]:
+            return dates[0], dates[1]
+        # Many statements print the year once: December 20 - January 19, 2024.
+        endpoints = re.split(r"\s+(?:-|–|—|to|through)\s+", line, flags=re.I)
+        if len(endpoints) == 2:
+            end_match = re.search(_FULL_DATE_TOKEN, endpoints[1])
+            start_match = re.search(
+                r"(?:\d{1,2}[-/.]\d{1,2}|[A-Za-z]{3,9}\.?\s+\d{1,2}"
+                r"|\d{1,2}\s+[A-Za-z]{3,9}\.?)\s*$", endpoints[0])
+            if end_match and start_match:
+                end = parse_date(end_match.group(), dayfirst=dayfirst)
+                if end:
+                    start = parse_date(start_match.group(), dayfirst=dayfirst,
+                                       default_year=int(end[:4]))
+                    if start and start > end:
+                        start = parse_date(start_match.group(), dayfirst=dayfirst,
+                                           default_year=int(end[:4]) - 1)
+                    if start:
+                        return start, end
+    return None
+
+
+def _statement_date(token, *, dayfirst, default_year, period=None):
+    """Resolve a short date inside a known December-to-January period."""
+    explicit = parse_date(token, dayfirst=dayfirst)
+    if explicit:
+        return explicit, ()
+    iso = parse_date(token, dayfirst=dayfirst,
+                     default_year=int(period[1][:4]) if period else default_year)
+    if iso and period and period[0][:4] != period[1][:4]:
+        month_day = iso[5:]
+        candidates = [f"{year}-{month_day}" for year in
+                      range(int(period[0][:4]), int(period[1][:4]) + 1)]
+        candidates = [date for date in candidates if period[0] <= date <= period[1]
+                      and parse_date(date) is not None]
+        if len(candidates) == 1:
+            return candidates[0], ("year_inferred_rollover",)
+    return iso, ()
+
+
+_TOTAL_LABELS = {
+    "opening": r"(?:opening|beginning|starting|previous|prior)\s+balance|balance\s+(?:brought|carried)\s+forward|balance\s+b/?f",
+    "money_in": r"(?:total\s+)?(?:money\s+in|deposits?(?:\s*(?:and|&|/)\s*(?:other\s+)?(?:additions|credits))?|credits?|additions)",
+    "money_out": r"(?:total\s+)?(?:money\s+out|withdrawals?(?:\s*(?:and|&|/)\s*(?:other\s+)?(?:debits|deductions|subtractions))?|debits?|deductions|subtractions)",
+    "closing": r"(?:closing|ending|final)\s+balance",
+    "previous": r"(?:previous|prior|beginning)\s+balance",
+    "payments_credits": r"(?:total\s+)?payments?(?:\s*(?:and|&|/)\s*(?:other\s+)?credits?)?(?:\s+and\s+adjustments)?",
+    "purchases": r"(?:total\s+)?(?:purchases?(?:\s+and\s+(?:other\s+)?charges)?|new\s+charges)",
+    "fees": r"(?:total\s+)?fees?(?:\s+charged)?",
+    "interest": r"(?:total\s+)?interest(?:\s+(?:charged|charges))?",
+    "new": r"new\s+balance(?:\s+total)?",
+}
+
+
+def _account_type(text: str) -> str:
+    if re.search(r"^\s*(?:[A-Za-z][A-Za-z .&'-]{0,60}\s+)?credit\s+card\s+statement\b",
+                 text, re.I | re.M):
+        return "card"
+    if re.search(r"\bnew\s+balance\b", text, re.I) and re.search(
+            r"\b(?:previous\s+balance|purchases|payments\s+and\s+credits)\b", text, re.I):
+        return "card"
+    return "deposit"
+
+
+def _assert_transaction_dates(text, *, dayfirst, default_year, period, account_type):
+    """Fail closed on financial rows whose date token is impossible/unreadable."""
+    for line in text.splitlines():
+        match = _LEADING_DATE_RE.match(line)
+        if not match:
+            continue
+        token, rest = match.group(1), match.group(2)
+        if account_type == "card":
+            posted = _LEADING_DATE_RE.match(rest)
+            if posted:
+                token, rest = posted.group(1), posted.group(2)
+        amounts = _trailing_amounts(rest)
+        if not amounts or not any(re.search(r"[.$£€¥₩]", amount) for amount in amounts):
+            continue
+        iso, _ = _statement_date(token, dayfirst=dayfirst, default_year=default_year,
+                                 period=period)
+        if iso is None:
+            raise ConversionError("A transaction date could not be read. "
+                                  "Check the statement dates or provide the statement year.")
+
+
+def extract_totals(text: str, *, account_type: str = "deposit") -> dict[str, Decimal | None]:
+    """Extract whole-label statement summaries; never fabricate missing figures."""
+    keys = (("previous", "payments_credits", "purchases", "fees", "interest", "new")
+            if account_type == "card" else ("opening", "money_in", "money_out", "closing"))
+    totals = {key: None for key in keys}
+    found = {key: set() for key in keys}
+    separate_payments, separate_credits = set(), set()
+    combined_payments = False
+    lines = text.splitlines()
+    for index, raw in enumerate(lines):
+        # Dated opening/closing balance rows are summaries, not transactions.
+        line = raw.strip()
+        dated = _LEADING_DATE_RE.match(line)
+        if dated:
+            line = dated.group(2)
+            endpoints = ("previous", "new") if account_type == "card" else ("opening", "closing")
+            if not any(re.match(r"^(?:" + _TOTAL_LABELS[key] + r")\b", line, re.I)
+                       for key in endpoints):
+                continue
+        for key in keys:
+            label = re.match(r"^(?:" + _TOTAL_LABELS[key] + r")\b", line, re.I)
+            if not label:
+                continue
+            suffix = line[label.end():].strip(" :\t")
+            # 'Opening balance on March 1' is a printed opening balance too.
+            amounts = _trailing_amounts(suffix)
+            value = parse_amount(amounts[-1]) if len(amounts) == 1 else None
+            qualifier = _strip_trailing_numbers(suffix, 1) if amounts else suffix
+            if qualifier:
+                date_qualifier = re.match(r"^(?:on|as\s+of)\s+(.+)$", qualifier, re.I)
+                if key not in ("opening", "closing", "previous", "new") or not date_qualifier \
+                        or not parse_date(date_qualifier.group(1)):
+                    value = None
+            if not suffix and index + 1 < len(lines):
+                value = parse_amount(lines[index + 1].strip())
+            if value is not None:
+                if key in ("money_in", "money_out", "payments_credits"):
+                    value = abs(value)
+                found[key].add(value)
+                if key == "payments_credits":
+                    if re.search(r"credits?|adjustments", label.group(), re.I):
+                        combined_payments = True
+                    else:
+                        separate_payments.add(value)
+        if account_type == "card" and not dated:
+            credit_label = re.match(r"^(?:(?:other|total)\s+)?credits?\b", line, re.I)
+            if credit_label:
+                credit = parse_amount(line[credit_label.end():].strip(" :\t"))
+                if credit is not None:
+                    separate_credits.add(abs(credit))
+    for key, values in found.items():
+        if len(values) == 1:
+            totals[key] = next(iter(values))
+    if account_type == "card" and not combined_payments and len(separate_payments) == 1 \
+            and len(separate_credits) == 1:
+        totals["payments_credits"] = next(iter(separate_payments)) + next(iter(separate_credits))
+    return totals
+
+
+def _card_category(description: str, section: str = "", native_amount=None) -> str:
+    if section:
+        return section
+    if re.search(r"\b(?:payment|credit|refund)\b", description, re.I):
+        return "payment_credit"
+    if re.search(r"\bfee\b", description, re.I):
+        return "fee"
+    if re.search(r"\binterest\b", description, re.I):
+        return "interest"
+    if native_amount is not None and native_amount < 0:
+        return "payment_credit"
+    return "purchase"
+
+
+def _card_amount(amount: Decimal, category: str) -> Decimal:
+    # Card statements express debt movement; normalized rows express money out.
+    return abs(amount) if category == "payment_credit" else -amount
+
+
 # --------------------------------------------------------------------------- #
 # Strategy 1: ruled tables
 # --------------------------------------------------------------------------- #
@@ -134,6 +322,8 @@ def _from_tables(
     currency: str,
     dayfirst: bool,
     default_year: Optional[int],
+    period: Optional[tuple[str, str]] = None,
+    account_type: str = "deposit",
 ) -> List[Transaction]:
     out: List[Transaction] = []
     for table in tables:
@@ -157,7 +347,7 @@ def _from_tables(
         if max(date_score) == 0 or max(amt_score) == 0:
             continue
 
-        header = [h.lower() for h in rows[0]]
+        header = [" ".join(h.lower().split()) for h in rows[0]]
         date_col = _find_header(header, ("posted date", "posting date", "post date"))
         if date_col is None or not date_score[date_col]:
             date_col = max(range(ncols), key=lambda j: date_score[j])
@@ -171,19 +361,39 @@ def _from_tables(
             cands = [j for j in range(ncols) if j not in taken and amt_score[j] > 0]
             amount_col = max(cands, key=lambda j: amt_score[j]) if cands else None
 
-        desc_col = _guess_description_col(
-            ncols, {date_col, debit_col, credit_col, balance_col, amount_col}, body
-        )
+        desc_col = _find_header(header, ("description", "merchant", "details", "memo"))
+        if desc_col is None:
+            desc_col = _guess_description_col(
+                ncols, {j for j, score in enumerate(date_score) if score} |
+                {date_col, debit_col, credit_col, balance_col, amount_col}, body)
 
         for r in body:
-            iso = parse_date(r[date_col], dayfirst=dayfirst, default_year=default_year)
+            iso, flags = _statement_date(r[date_col], dayfirst=dayfirst,
+                                         default_year=default_year, period=period)
             if not iso:
+                if r == rows[0] or re.search(r"\bdate\b", r[date_col], re.I):
+                    continue
+                if out and desc_col is not None and r[desc_col] and not any(
+                        parse_amount(cell) is not None for cell in r):
+                    # A description continued on another ruled-table row.
+                    if not _SECTION_HEADER_RE.match(r[desc_col]):
+                        out[-1].description += " " + " ".join(r[desc_col].split())
+                        out[-1].flags = tuple(dict.fromkeys(
+                            (*out[-1].flags, "multiline_description")))
                 continue
             amount = _row_amount(r, debit_col, credit_col, amount_col)
             if amount is None:
                 continue
             balance = parse_amount(r[balance_col]) if balance_col is not None else None
             desc = " ".join(r[desc_col].split()) if desc_col is not None else ""
+            if _BALANCE_SEED_RE.match(desc) or re.fullmatch(
+                    r"(?:closing|ending|new)\s+balance", desc, re.I):
+                continue
+            if desc_col is not None and "\n" in r[desc_col]:
+                flags += ("multiline_description",)
+            category = _card_category(desc, native_amount=amount) if account_type == "card" else ""
+            if account_type == "card":
+                amount = _card_amount(amount, category)
             out.append(
                 Transaction(
                     date=iso,
@@ -191,6 +401,8 @@ def _from_tables(
                     amount=amount,
                     balance=balance,
                     currency=currency,
+                    flags=flags,
+                    category=category,
                 )
             )
     return out
@@ -274,7 +486,7 @@ _AMOUNT_TOKEN_RE = re.compile(
 )
 _PAGE_BOUNDARY = "\x00STX_PAGE_BOUNDARY\x00"
 _SECTION_HEADER_RE = re.compile(
-    r"^(?:page\s+\d+\b|date\b.*\b(?:amount|description)\b|"
+    r"^(?:page\s+\d+\b|(?:(?:transaction|posting|posted)\s+)?date\b.*\b(?:amount|description)\b|"
     r"(?:statement|account)\s+(?:period|ending|number|statement)\b|"
     r".*\b(?:statement|transaction history)\s*$)", re.IGNORECASE
 )
@@ -305,7 +517,7 @@ def _sign_from_delta(
     if balance is None or anchor is None:
         return amount
     delta = balance - anchor
-    if abs(abs(delta) - abs(amount)) > Decimal("0.01"):
+    if abs(delta) != abs(amount):
         return amount
     if delta < 0:
         return -abs(amount)
@@ -327,6 +539,9 @@ class _Row:
     amount: Decimal
     balance: Optional[Decimal]
     is_seed: bool
+    flags: tuple[str, ...] = ()
+    explicit_sign: bool = False
+    category: str = ""
 
 
 def _parse_rows(
@@ -334,6 +549,8 @@ def _parse_rows(
     *,
     dayfirst: bool,
     default_year: Optional[int],
+    period: Optional[tuple[str, str]] = None,
+    account_type: str = "deposit",
 ) -> List[_Row]:
     """Parse borderless lines into :class:`_Row` records (no sign inference yet).
 
@@ -345,6 +562,7 @@ def _parse_rows(
     """
     rows: List[_Row] = []
     last_txn: Optional[_Row] = None
+    section = ""
     for raw in lines:
         line = raw.rstrip()
         if not line.strip():
@@ -352,6 +570,19 @@ def _parse_rows(
         if line == _PAGE_BOUNDARY or _SECTION_HEADER_RE.match(line.strip()):
             last_txn = None
             continue
+        if account_type == "card":
+            for label, category in (("payments_credits", "payment_credit"),
+                                    ("purchases", "purchase"), ("fees", "fee"),
+                                    ("interest", "interest")):
+                if re.fullmatch(r"(?:" + _TOTAL_LABELS[label] + r")(?:\s*\(continued\))?",
+                                line.strip(), re.I):
+                    section = category
+                    last_txn = None
+                    break
+            else:
+                category = None
+            if category:
+                continue
         m = _LEADING_DATE_RE.match(line)
         if not m:
             # Continuation line: fold into the previous transaction's memo.
@@ -359,10 +590,19 @@ def _parse_rows(
                 extra = line.strip()
                 if extra:
                     last_txn.desc = (last_txn.desc + " " + extra).strip()
+                    last_txn.flags = tuple(dict.fromkeys(
+                        (*last_txn.flags, "multiline_description")))
             continue
 
         date_tok, rest = m.group(1), m.group(2)
-        iso = parse_date(date_tok, dayfirst=dayfirst, default_year=default_year)
+        # Credit-card detail tables print transaction and posting dates. The
+        # posting date is the ledger date; the first date stays out of the memo.
+        if account_type == "card":
+            posted = _LEADING_DATE_RE.match(rest)
+            if posted:
+                date_tok, rest = posted.group(1), posted.group(2)
+        iso, flags = _statement_date(date_tok, dayfirst=dayfirst,
+                                     default_year=default_year, period=period)
         if not iso:
             continue
 
@@ -392,11 +632,18 @@ def _parse_rows(
                     _Row(iso=iso, desc=desc, amount=seed, balance=seed, is_seed=True)
                 )
                 continue
+        if n_strip == 1 and re.fullmatch(r"(?:closing|ending|new)\s+balance", desc, re.I):
+            continue
 
         amount = parse_amount(amount_str)
         if amount is None:
             continue
-        row = _Row(iso=iso, desc=desc, amount=amount, balance=balance, is_seed=False)
+        category = _card_category(desc, section, amount) if account_type == "card" else ""
+        if account_type == "card":
+            amount = _card_amount(amount, category)
+        explicit_sign = bool(re.search(r"[()+-]|\b(?:DR|CR)\b", amount_str, re.I))
+        row = _Row(iso=iso, desc=desc, amount=amount, balance=balance, is_seed=False,
+                   flags=flags, explicit_sign=explicit_sign, category=category)
         rows.append(row)
         last_txn = row
     return rows
@@ -435,8 +682,12 @@ def _from_lines(
     currency: str,
     dayfirst: bool,
     default_year: Optional[int],
+    period: Optional[tuple[str, str]] = None,
+    account_type: str = "deposit",
+    opening_balance: Optional[Decimal] = None,
 ) -> List[Transaction]:
-    rows = _parse_rows(lines, dayfirst=dayfirst, default_year=default_year)
+    rows = _parse_rows(lines, dayfirst=dayfirst, default_year=default_year,
+                       period=period, account_type=account_type)
     direction = _statement_direction(rows)
 
     out: List[Transaction] = []
@@ -471,7 +722,7 @@ def _from_lines(
                 anchor: Optional[Decimal] = None  # chain break: decline
             else:
                 anchor = nxt.balance
-            amount = _sign_from_delta(row.amount, anchor, row.balance)
+            amount, flags = _resolve_row_sign(row, anchor, account_type)
             out.append(
                 Transaction(
                     date=row.iso,
@@ -479,6 +730,8 @@ def _from_lines(
                     amount=amount,
                     balance=row.balance,
                     currency=currency,
+                    flags=flags,
+                    category=row.category,
                 )
             )
         return out
@@ -488,7 +741,7 @@ def _from_lines(
     # guards the coincidence where a balance-less row leaves the anchor stale and
     # the next row's spanning delta happens to match |amount| — in that state the
     # next balanced row may only RE-ANCHOR, never re-sign.
-    anchor: Optional[Decimal] = None
+    anchor: Optional[Decimal] = opening_balance
     chain_broken = False
     for row in rows:
         if row.is_seed:
@@ -497,8 +750,9 @@ def _from_lines(
             continue
         if chain_broken:
             amount = row.amount  # do not re-sign across a broken chain
+            flags = row.flags
         else:
-            amount = _sign_from_delta(row.amount, anchor, row.balance)
+            amount, flags = _resolve_row_sign(row, anchor, account_type)
         if row.balance is not None:
             anchor = row.balance
             chain_broken = False
@@ -511,9 +765,21 @@ def _from_lines(
                 amount=amount,
                 balance=row.balance,
                 currency=currency,
+                flags=flags,
+                category=row.category,
             )
         )
     return out
+
+
+def _resolve_row_sign(row: _Row, anchor: Optional[Decimal], account_type: str):
+    if row.explicit_sign or account_type == "card":
+        return row.amount, row.flags
+    amount = _sign_from_delta(row.amount, anchor, row.balance)
+    if row.balance is not None and anchor is not None and row.balance != anchor \
+            and abs(row.balance - anchor) == abs(row.amount):
+        return amount, (*row.flags, "sign_from_balance")
+    return amount, row.flags
 
 
 def _trailing_amounts(rest: str) -> List[str]:
@@ -560,7 +826,7 @@ def convert_text(
     currency: str = "USD",
     dayfirst: Optional[bool] = None,
     default_year: Optional[int] = None,
-) -> List[Transaction]:
+) -> StatementTransactions:
     """Convert already-extracted statement content into transactions.
 
     Pass any combination of ``full_text`` (used for year / day-first inference),
@@ -569,32 +835,74 @@ def convert_text(
     otherwise the line scanner is used. Raises :class:`ConversionError` if
     neither finds anything.
     """
-    hint_text = full_text or ("\n".join(lines) if lines else "")
+    hint_text = "\n".join([full_text, *(lines or []), *(
+        " ".join(cell or "" for cell in row)
+        for table in (tables or []) for row in table if row)])
     _assert_single_account(hint_text)
     if default_year is None:
         default_year = _infer_year(hint_text)
     if dayfirst is None:
         dayfirst = _infer_dayfirst(hint_text)
+    period = _statement_period(hint_text, dayfirst)
+    account_type = _account_type(hint_text)
+    totals = extract_totals(hint_text, account_type=account_type)
+    _assert_transaction_dates(hint_text, dayfirst=dayfirst, default_year=default_year,
+                              period=period, account_type=account_type)
 
     table_txns: List[Transaction] = []
     if tables:
         table_txns = _from_tables(
-            tables, currency=currency, dayfirst=dayfirst, default_year=default_year
+            tables, currency=currency, dayfirst=dayfirst, default_year=default_year,
+            period=period, account_type=account_type,
         )
 
     line_txns: List[Transaction] = []
     if lines:
         line_txns = _from_lines(
-            lines, currency=currency, dayfirst=dayfirst, default_year=default_year
+            lines, currency=currency, dayfirst=dayfirst, default_year=default_year,
+            period=period, account_type=account_type,
+            opening_balance=totals.get("opening"),
         )
 
+    _inherit_table_metadata(table_txns, line_txns, account_type)
     chosen = _choose_strategy(table_txns, line_txns)
-    if not chosen:
+    if not chosen and not _proven_no_activity(hint_text, totals, account_type):
         raise ConversionError(
             "No transactions found. The statement may be image-only (needs OCR) "
             "or use an unsupported layout."
         )
-    return chosen
+    layout = account_type + ("_table" if table_txns and chosen is table_txns else "_lines")
+    return StatementTransactions(chosen, reconciliation=reconcile(
+        chosen, totals, account_type=account_type), layout=layout)
+
+
+def _proven_no_activity(text, totals, account_type):
+    required = (("previous", "payments_credits", "purchases", "fees", "interest", "new")
+                if account_type == "card" else ("opening", "closing"))
+    if any(totals.get(key) is None for key in required):
+        return False
+    flow_keys = (("payments_credits", "purchases", "fees", "interest")
+                 if account_type == "card" else ("money_in", "money_out"))
+    printed_zero = all(totals.get(key) == 0 for key in flow_keys)
+    explicit = bool(re.search(r"\bno\s+(?:account\s+)?(?:activity|transactions)\b", text, re.I))
+    return printed_zero or explicit
+
+
+def _inherit_table_metadata(table_txns, line_txns, account_type):
+    """Carry section provenance into the independently extracted ruled cells."""
+    candidates = list(line_txns)
+    for row in table_txns:
+        for index, candidate in enumerate(candidates):
+            if row.date == candidate.date and abs(row.amount) == abs(candidate.amount) \
+                    and row.description == candidate.description:
+                row.flags = tuple(dict.fromkeys((*row.flags, *(flag for flag in candidate.flags
+                    if flag != "sign_from_balance"))))
+                if account_type == "card":
+                    row.category = candidate.category
+                    row.amount = candidate.amount
+                    row.type = "debit" if row.amount < 0 else "credit"
+                candidates.pop(index)
+                break
 
 
 def _choose_strategy(
@@ -627,7 +935,7 @@ def convert_pdf(
     currency: str = "USD",
     dayfirst: Optional[bool] = None,
     default_year: Optional[int] = None,
-) -> List[Transaction]:
+) -> StatementTransactions:
     """Read a *text-based* PDF at ``path`` and return its transactions.
 
     Requires the optional ``pdfplumber`` dependency. For scanned / image-only
@@ -691,20 +999,31 @@ def convert_pdf(
         default_year = _infer_year(full_text)
     if dayfirst is None:
         dayfirst = _infer_dayfirst(full_text)
+    period = _statement_period(full_text, dayfirst)
+    account_type = _account_type(full_text)
+    totals = extract_totals(full_text, account_type=account_type)
+    _assert_transaction_dates(full_text, dayfirst=dayfirst, default_year=default_year,
+                              period=period, account_type=account_type)
     line_txns = _from_lines(all_lines, currency=currency, dayfirst=dayfirst,
-                            default_year=default_year)
+                            default_year=default_year, period=period,
+                            account_type=account_type, opening_balance=totals.get("opening"))
     # Select per page: one ruled page must not hide transactions on a later
     # borderless page. Global line parsing above retains cross-page balance signs.
     chosen = []
+    used_tables = False
     offset = 0
     for page_lines, page_tables, has_images in pages:
         row_count = sum(not row.is_seed for row in _parse_rows(
-            page_lines, dayfirst=dayfirst, default_year=default_year))
+            page_lines, dayfirst=dayfirst, default_year=default_year,
+            period=period, account_type=account_type))
         page_line_txns = line_txns[offset:offset + row_count]
         offset += row_count
         table_txns = _from_tables(page_tables, currency=currency, dayfirst=dayfirst,
-                                 default_year=default_year)
+                                 default_year=default_year, period=period,
+                                 account_type=account_type)
+        _inherit_table_metadata(table_txns, page_line_txns, account_type)
         page_chosen = _choose_strategy(table_txns, page_line_txns)
+        used_tables = used_tables or bool(table_txns and page_chosen is table_txns)
         if has_images and not page_chosen:
             raise ConversionError(
                 "An image-bearing PDF page has no readable transactions. It may "
@@ -712,9 +1031,11 @@ def convert_pdf(
                 "or upload text-only statement pages; this PDF cannot be converted safely."
             )
         chosen.extend(page_chosen)
-    if not chosen:
+    if not chosen and not _proven_no_activity(full_text, totals, account_type):
         raise ConversionError(
             "No transactions found. The statement may be image-only (needs OCR) "
             "or use an unsupported layout."
         )
-    return chosen
+    return StatementTransactions(chosen, reconciliation=reconcile(
+        chosen, totals, account_type=account_type),
+        layout=account_type + ("_table" if used_tables else "_lines"))
