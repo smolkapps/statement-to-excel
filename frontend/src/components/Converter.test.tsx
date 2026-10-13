@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { I18nProvider } from "../i18n/I18nContext";
+import { LOCALES, LOCALE_ORDER, type LocaleCode } from "../i18n";
 
 // Mock the API client so the component test drives the UI, not the network.
 // Keep ApiError real (the component branches on `instanceof ApiError`).
@@ -14,9 +15,9 @@ vi.mock("../lib/api", async () => {
 import { Converter } from "./Converter";
 import { ApiError, type ConvertOutcome } from "../lib/api";
 
-function renderConverter(props: Parameters<typeof Converter>[0]) {
+function renderConverter(props: Parameters<typeof Converter>[0], locale: LocaleCode = "en") {
   return render(
-    <I18nProvider initialLocale="en">
+    <I18nProvider initialLocale={locale}>
       <Converter {...props} />
     </I18nProvider>,
   );
@@ -65,6 +66,7 @@ describe("Converter", () => {
   beforeEach(() => {
     convertStatement.mockReset();
     // jsdom has no object-URL support; the download path calls these.
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     vi.stubGlobal("URL", {
       ...URL,
       createObjectURL: vi.fn(() => "blob:mock"),
@@ -73,6 +75,8 @@ describe("Converter", () => {
   });
 
   afterEach(() => {
+    delete window.umami;
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -108,6 +112,71 @@ describe("Converter", () => {
     // Mirrors charge.pages (4), not a hardcoded 1, and only once per convert.
     expect(onCharged).toHaveBeenCalledTimes(1);
     expect(onCharged).toHaveBeenCalledWith(4);
+  });
+
+  it("accepts only one batched conversion click and emits privacy-safe success events", async () => {
+    const analytics = vi.fn();
+    window.umami = { track: analytics };
+    let complete!: (value: ConvertOutcome) => void;
+    convertStatement.mockImplementation(() => new Promise<ConvertOutcome>((resolve) => { complete = resolve; }));
+    const onCharged = vi.fn();
+    renderConverter({ accountId: "web_test", onCharged });
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [new File(["synthetic"], "private-filename.pdf")] } });
+    const button = screen.getByRole("button", { name: "Convert" });
+    act(() => { button.click(); button.click(); });
+    expect(convertStatement).toHaveBeenCalledTimes(1);
+    await act(async () => complete(outcome(1)));
+    expect(onCharged).toHaveBeenCalledTimes(1);
+    expect(analytics.mock.calls).toEqual([["file-selected"], ["convert-success"]]);
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    expect(convertStatement).toHaveBeenCalledTimes(1);
+    expect(analytics).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    "Password-protected PDFs are not supported. Remove the password and try again.",
+    "This PDF contains scanned pages without a text layer. Run OCR first.",
+    "Multiple accounts were found. Convert each account separately.",
+  ])("shows the backend's actionable PDF error: %s", async (detail) => {
+    const analytics = vi.fn();
+    window.umami = { track: analytics };
+    convertStatement.mockRejectedValue(new ApiError("parse", detail));
+    renderConverter({ accountId: "web_test" });
+    selectFileAndConvert();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(detail));
+    expect(analytics.mock.calls).toEqual([["file-selected"], ["convert-error"]]);
+  });
+
+  it.each([undefined, { metered: false as const, pages: 5 }])("does not refresh billing for an unmetered or absent charge: %s", async (charge) => {
+    const converted = outcome(5);
+    converted.result.charge = charge;
+    convertStatement.mockResolvedValue(converted);
+    const onCharged = vi.fn();
+    renderConverter({ accountId: "web_test", onCharged });
+    selectFileAndConvert();
+    await waitFor(() => expect(screen.getByText("ACH PAYROLL DEPOSIT")).toBeInTheDocument());
+    expect(onCharged).not.toHaveBeenCalled();
+  });
+
+  it.each(LOCALE_ORDER)("hides raw conversion billing conflicts behind the existing generic message in %s", async (locale) => {
+    const detail = "Idempotency key belongs to another conversion.";
+    convertStatement.mockRejectedValue(new ApiError("parse", detail, 409));
+    renderConverter({ accountId: "web_test" }, locale);
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [new File(["synthetic"], "statement.pdf")] } });
+    fireEvent.click(screen.getByRole("button", { name: LOCALES[locale].convert_button }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(LOCALES[locale].convert_error_generic));
+    expect(screen.getByRole("alert")).not.toHaveTextContent(detail);
+  });
+
+  it("hides raw billing or service-unavailable errors during conversion", async () => {
+    const detail = "Stripe billing provider is unavailable because internal configuration is missing.";
+    convertStatement.mockRejectedValue(new ApiError("parse", detail, 503));
+    renderConverter({ accountId: "web_test" });
+    selectFileAndConvert();
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(LOCALES.en.convert_error_generic));
+    expect(screen.getByRole("alert")).not.toHaveTextContent(detail);
   });
 
   it("does not charge when the account has insufficient credits", async () => {

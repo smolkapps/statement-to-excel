@@ -6,20 +6,67 @@ deterministic, and use the synthetic acmebank fixture as the uploaded PDF.
 
 import base64
 import io
+import hashlib
+import hmac
+import json
+import time
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
 import statement_to_excel.api as api_mod
-from statement_to_excel.billing import Ledger, MockBillingProvider
+from statement_to_excel.billing import (
+    CREDIT_PACKS, PLANS, Ledger,
+    PersistentLedger, StripeBillingProvider,
+)
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, configured_provider):
     # Fresh ledger + provider per test.
     monkeypatch.setattr(api_mod, "LEDGER", Ledger())
-    monkeypatch.setattr(api_mod, "PROVIDER", MockBillingProvider())
     return TestClient(api_mod.app)
+
+
+@pytest.fixture
+def paid_client(monkeypatch, tmp_path):
+    """Real signed-webhook API with synthetic Stripe checkout transport."""
+    import stripe
+    monkeypatch.setattr(api_mod, "LEDGER", PersistentLedger(str(tmp_path / "billing.sqlite3")))
+    monkeypatch.setattr(api_mod, "PROVIDER", StripeBillingProvider(
+        "sk_test_synthetic_not_a_credential", "whsec_synthetic_not_a_credential"
+    ))
+    monkeypatch.setattr(stripe.checkout.Session, "create", lambda **kwargs: {
+        "id": "cs_test_" + uuid.uuid4().hex,
+        "url": "https://checkout.stripe.com/synthetic-test-only",
+    })
+    return TestClient(api_mod.app)
+
+
+def _purchase(client, account_id, sku):
+    checkout = client.post("/api/checkout", json={"account_id": account_id, "sku": sku},
+                           headers={"Idempotency-Key": str(uuid.uuid4())})
+    assert checkout.status_code == 200, checkout.text
+    pack = sku in CREDIT_PACKS
+    price = CREDIT_PACKS[sku].price_usd if pack else PLANS[sku].monthly_price_usd
+    event = {"id": "evt_test_" + uuid.uuid4().hex, "type": "checkout.session.completed",
+             "livemode": False, "data": {"object": {
+                 "id": checkout.json()["session_id"], "livemode": False,
+                 "payment_status": "paid", "currency": "usd", "amount_total": int(price * 100),
+                 "mode": "payment" if pack else "subscription",
+                 "subscription": None if pack else "sub_test_" + uuid.uuid4().hex,
+                 "metadata": {"account_id": account_id, "sku": sku},
+             }}}
+    payload = json.dumps(event).encode()
+    stamp = str(int(time.time()))
+    signature = hmac.new(b"whsec_synthetic_not_a_credential", stamp.encode() + b"." + payload,
+                         hashlib.sha256).hexdigest()
+    paid = client.post("/api/stripe/webhook", content=payload,
+                       headers={"Stripe-Signature": f"t={stamp},v1={signature}"})
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["granted"]
+    return client.get(f"/api/account/{account_id}").json()
 
 
 @pytest.fixture
@@ -31,13 +78,15 @@ def test_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
-    assert r.json()["billing"] == "mock"
+    assert r.json()["billing"] == "stripe"
+    assert r.json()["checkout_available"] is True
 
 
 def test_pricing_catalog(client):
     r = client.get("/api/pricing")
     assert r.status_code == 200
     body = r.json()
+    assert body["checkout_available"] is True
     ids = {p["id"] for p in body["plans"]}
     assert {"free", "starter", "business", "firm"} <= ids
     assert any(p["id"] == "pack_50" for p in body["credit_packs"])
@@ -136,35 +185,22 @@ def test_convert_blocks_when_out_of_allowance(client, pdf_bytes):
     assert r.json()["error"] == "insufficient_credits"
 
 
-def test_checkout_then_fulfill_grants_credits(client):
-    r = client.post("/api/checkout", json={"account_id": "payer", "sku": "pack_50"})
-    assert r.status_code == 200
-    sid = r.json()["session_id"]
-    f = client.post(f"/api/checkout/{sid}/fulfill")
-    assert f.status_code == 200
-    acct = client.get("/api/account/payer").json()
+def test_checkout_then_paid_webhook_grants_credits(paid_client):
+    acct = _purchase(paid_client, "payer", "pack_50")
     assert acct["credits"] == 50
+    assert acct["pro"]
 
 
-def test_checkout_then_fulfill_plan_reports_the_right_account(client):
+def test_checkout_then_paid_webhook_plan_reports_the_right_account(paid_client):
     # Seed an unrelated ledger entry first, so an implementation that guesses
     # the account from the global charge log returns the wrong one.
-    other_sid = client.post(
-        "/api/checkout", json={"account_id": "other", "sku": "pack_50"}
-    ).json()["session_id"]
-    client.post(f"/api/checkout/{other_sid}/fulfill")
-
-    r = client.post("/api/checkout", json={"account_id": "upgrader", "sku": "business"})
-    assert r.status_code == 200
-    sid = r.json()["session_id"]
-    f = client.post(f"/api/checkout/{sid}/fulfill")
-    assert f.status_code == 200
-    acct = f.json()["account"]
+    _purchase(paid_client, "other", "pack_50")
+    acct = _purchase(paid_client, "upgrader", "business")
     assert acct is not None
     assert acct["id"] == "upgrader"
     assert acct["plan"] == "business"
     # The grant is visible on the account resource too.
-    assert client.get("/api/account/upgrader").json()["plan"] == "business"
+    assert paid_client.get("/api/account/upgrader").json()["plan"] == "business"
 
 
 def test_fulfill_unknown_session_404(client):
@@ -172,7 +208,8 @@ def test_fulfill_unknown_session_404(client):
     assert r.status_code == 404
 
 
-def test_buying_credits_unblocks_conversion(client, pdf_bytes):
+def test_buying_credits_unblocks_conversion(paid_client, pdf_bytes):
+    client = paid_client
     # Drain allowance.
     for _ in range(3):
         files = {"file": ("a.pdf", io.BytesIO(pdf_bytes), "application/pdf")}
@@ -180,10 +217,7 @@ def test_buying_credits_unblocks_conversion(client, pdf_bytes):
             "/api/convert", files=files, data={"account_id": "vip", "fmt": "csv"}
         )
     # Buy credits.
-    sid = client.post(
-        "/api/checkout", json={"account_id": "vip", "sku": "pack_50"}
-    ).json()["session_id"]
-    client.post(f"/api/checkout/{sid}/fulfill")
+    _purchase(client, "vip", "pack_50")
     # Now conversion succeeds and spends a credit.
     files = {"file": ("a.pdf", io.BytesIO(pdf_bytes), "application/pdf")}
     r = client.post(

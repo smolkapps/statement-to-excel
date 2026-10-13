@@ -1,7 +1,7 @@
 import { useI18n } from "../i18n/I18nContext";
 import { LOCALE_ORDER, LOCALES, type LocaleCode } from "../i18n";
 
-export function Header() {
+export function Header({ showPricing = false }: { showPricing?: boolean }) {
   const { t, locale, setLocale } = useI18n();
   return (
     <header className="site-header">
@@ -13,7 +13,7 @@ export function Header() {
       </a>
       <nav className="nav" aria-label="Primary">
         <a href="#product">{t.nav_product}</a>
-        <a href="#pricing">{t.nav_pricing}</a>
+        {showPricing && <a href="#pricing">{t.nav_pricing}</a>}
         <a href="#convert" className="nav-cta">
           {t.nav_convert}
         </a>

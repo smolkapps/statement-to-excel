@@ -29,8 +29,8 @@ describe("Pricing", () => {
     const onChoosePlan = vi.fn();
     renderWithI18n(<Pricing onChoosePlan={onChoosePlan} />);
     const planButtons = screen.getAllByRole("button", { name: "Choose plan" });
-    fireEvent.click(planButtons[0]);
-    expect(onChoosePlan).toHaveBeenCalledWith("free");
+    fireEvent.click(planButtons[1]);
+    expect(onChoosePlan).toHaveBeenCalledWith("starter");
   });
 
   it("localizes the heading into Japanese", () => {

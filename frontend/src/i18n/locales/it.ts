@@ -12,13 +12,13 @@ export const it: Translation = {
     "Commercialisti, contabili e team finanziari: basta ridigitare le transazioni. Trascina un PDF dell'estratto conto e ottieni un foglio di calcolo ordinato e preciso con ogni data, descrizione, importo e saldo.",
   hero_cta: "Converti un estratto conto",
   hero_secondary_cta: "Vedi i prezzi",
-  hero_trust: "Il PDF viene caricato sul nostro server per la conversione. Solo PDF con testo; gli estratti scansionati richiedono l'OCR.",
+  hero_trust: "Non vengono memorizzati dati dell'estratto conto. Il PDF viene caricato sul nostro server per la conversione ed eliminato subito dopo.",
 
   feature_accuracy_title: "Esatto, non approssimato",
   feature_accuracy_body:
     "Gli importi vengono interpretati come decimali esatti: parentesi, segno meno finale, indicatori DR/CR e separatori delle migliaia, tutto gestito. Addebiti e accrediti mantengono il segno corretto.",
-  feature_private_title: "Non richiede IA di terze parti",
-  feature_private_body: "Il convertitore estrae date, descrizioni, importi e saldi senza inviare l'estratto conto a un'API di IA di terze parti.",
+  feature_private_title: "Nessun dato dell'estratto memorizzato",
+  feature_private_body: "Gli estratti vengono elaborati in memoria ed eliminati subito dopo la conversione. L'estratto non viene mai inviato a un'API di IA di terze parti.",
   feature_formats_title: "Excel, CSV o JSON",
   feature_formats_body:
     "Ottieni un .xlsx formattato con un foglio di riepilogo, un CSV semplice per le importazioni o JSON per il tuo flusso di lavoro. Il tuo software contabile ti ringrazierà.",
@@ -62,6 +62,8 @@ export const it: Translation = {
   pricing_choose_plan: "Scegli il piano",
   pricing_credits_each: "per credito",
   pricing_credit_explainer: "1 credito converte 1 pagina di estratto conto. I crediti non scadono.",
+
+  checkout_error: "Impossibile aprire il pagamento. Riprova.",
 
   account_title: "Il tuo account",
   account_plan: "Piano",

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://statement-to-excel.apps.smolkin.org/sitemap.xml

@@ -36,6 +36,7 @@ export function getPack(id: string): CreditPack | undefined {
 }
 
 export interface AccountState {
+  pro?: boolean;
   planId: string;
   credits: number;
   pagesUsedThisCycle: number;

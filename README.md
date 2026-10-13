@@ -17,8 +17,9 @@ decimals (never rounded), debits and credits correctly signed.
 └─────────────────────┘      └──────────────────────┘      └────────────────────┘
 ```
 
-- **Runs offline.** The conversion path makes zero network calls and uses no API
-  keys. No ads, no data resale — you pay for the tool, not with your data.
+- **No external parsing service.** The parsing engine makes no outbound network
+  calls and uses no API keys. The hosted web UI uploads the selected PDF to this
+  app's backend; the CLI can run entirely on your machine.
 - **Business pricing, by design.** Monthly plans for steady volume **and**
   prepaid credit packs ($30–$400) for occasional use. 1 credit = 1 statement
   page. (No ads, no affiliate.)
@@ -40,7 +41,7 @@ statement-to-excel/
 │   │   ├── transaction.py       # the normalized Transaction model (Decimal)
 │   │   ├── engine.py            # PDF/text -> transactions (table + line strategies)
 │   │   ├── writers.py           # CSV / JSON / styled XLSX (+ summary sheet)
-│   │   ├── billing.py           # credits + subscription metering (mock provider)
+│   │   ├── billing.py           # durable metering + Stripe test Checkout
 │   │   ├── api.py               # FastAPI app (upload -> metered conversion)
 │   │   └── cli.py               # `stx statement.pdf -o out.xlsx`
 │   └── tests/                   # pytest, incl. synthetic PDF fixtures + error paths
@@ -76,7 +77,8 @@ Endpoints (see `api.py` for the full list):
 | `GET`  | `/api/pricing` | plan + credit-pack catalog |
 | `GET`  | `/api/account/{id}` | account metering state |
 | `POST` | `/api/account/{id}/quote` | cost of processing N pages (no charge) |
-| `POST` | `/api/checkout` + `/api/checkout/{sid}/fulfill` | (mock) buy credits / plan |
+| `POST` | `/api/checkout` | idempotent Stripe test Checkout |
+| `POST` | `/api/stripe/webhook` | signed paid event → exactly-once entitlement |
 
 ### Backend (CLI)
 
@@ -135,17 +137,80 @@ and mirrored client-side in `frontend/src/lib/pricing.ts` (kept in sync by
 - **Prepaid credits** — `pack_50` ($30), `pack_200` ($100), `pack_1000` ($400);
   1 credit converts 1 page; volume discounts the per-credit price.
 
-Real payment capture is **stubbed behind `STX_BILLING_PROVIDER`** (default
-`mock`): the mock provider records purchase intents in memory and grants
-credits/plans on fulfilment, so the whole buy→grant flow runs and is unit-tested
-with **no Stripe key**. Wiring a real provider is a single `BillingProvider`
-subclass.
+The service has two configuration modes. **Production runs unmetered until
+Stripe test credentials and the webhook are configured**, with
+`STX_BILLING_PROVIDER=stripe` and both keys unset initially.
+
+- **Checkout unavailable:** missing either an `sk_test_` secret key or a `whsec_`
+  webhook secret means `checkout_available=false`. Conversion accepts any valid
+  statement up to 100 pages under the 20 MiB limit, with all PDF validation and
+  deletion intact.
+  It consumes no allowance/credits, never returns 402, writes no account,
+  conversion-charge or checkout rows, and returns
+  `charge: {"metered": false, "pages": N}`. Expired-fingerprint cleanup may still
+  run. The UI hides the Pricing section and links, hero pricing button and
+  account chip, and makes no account or checkout calls. A failed pricing request
+  is treated as unavailable.
+- **Configured Stripe test billing:** both credentials satisfy the existing
+  provider configuration rule, making `checkout_available=true`. The existing
+  three-page free allowance, plan/credit metering, 24-hour conversion retry
+  protection, 402 errors and idempotent checkout/Pro grants apply. Checkout errors
+  display localized copy rather than backend configuration text.
+
+Both `GET /api/pricing` and `GET /api/health` expose `checkout_available`; the
+Stripe provider is its single source of truth. The flag describes configuration
+readiness, not remote Stripe connectivity. Live keys and events are rejected.
+Checkout requests require a stable `Idempotency-Key`; a durable SQLite
+ledger reserves purchases before contacting Stripe and grants Pro only once from
+verified paid webhooks. Browser redirects and localStorage never grant access.
+Mock billing exists only as an explicitly injected unit-test double.
+
+See [AGENTS.md](AGENTS.md) for the deploy model, privacy contract and full
+verification commands. The external frontend autodeploy job does not start the
+backend: production must route `/api/*` to a separately supervised ASGI service
+before the SPA fallback. The repository contains an nginx example, not the
+operator's actual production configuration.
+
+Both billing modes reject PDFs over **100 pages** with HTTP 413 before extracting
+transactions. Counting, parsing and output serialization run in a worker thread
+so a long conversion does not block the API's health endpoint.
+
+### Privacy
+
+No statement data is stored. Your PDF is uploaded to our server for conversion
+and deleted right after. Accepted uploads, converted rows and Excel worksheet
+XML/workbooks are processed in memory. The app's **21 MiB multipart spool
+threshold** exceeds its unchanged **20 MiB file limit**, so accepted PDFs never
+create temporary disk files. Uploads are closed immediately in all success and
+failure paths, with cleanup shielded from request cancellation; oversized
+rejected or deliberately spooled files are deleted.
+Statement bytes and extracted rows are never persisted or sent to analytics.
+
+Production nginx must match `frontend/deploy/nginx.conf.example`: use
+`client_body_buffer_size 21m`, `proxy_request_buffering off` and
+`proxy_buffering off` for `/api/*`, including HTTP/1.1 and HTTP/2. Its
+`client_max_body_size 21m` allows multipart overhead around a 20 MiB PDF; the API
+still returns HTTP 413 for any file over 20 MiB. These settings must also be
+respected by any other production proxy.
+
+Account/credit records and payment metadata are stored in configured billing
+mode. Unmetered conversion creates no billing rows. For metered conversion
+retries, the service also stores a SHA-256 fingerprint of the upload and conversion
+options in an idempotency row with a **24-hour retention window**, measured from
+its creation; replaying it does not refresh the window. Every conversion POST
+purges rows older than 24 hours, including rejected requests. Cleanup is
+opportunistic: without conversion traffic, removal of expired rows waits for the
+next request. An expired key is treated as a new conversion and can consume usage
+again. On migration, legacy fingerprint rows with unknown creation times are
+discarded, while account/credit balances and historical usage remain unchanged.
+These expiry rules apply only to conversion retry records, not payment or Pro
+entitlement idempotency.
 
 ---
 
 ## Testing
 
-All tests run offline. Fixtures are **synthetic** statements generated with
+Tests use synthetic statements and fake Stripe transports; conversion makes no outbound calls. Fixtures are **synthetic** statements generated with
 reportlab (`backend/tests/make_fixtures.py`) — no private data.
 
 ```bash
@@ -153,18 +218,19 @@ reportlab (`backend/tests/make_fixtures.py`) — no private data.
 cd backend && . .venv/bin/activate
 pip install -e ".[test]"
 python tests/make_fixtures.py     # (re)generate fixtures (also auto-built by conftest)
-pytest                            # 81 tests
+pytest
 
 # Frontend
 cd frontend && npm install
-npm test                          # 37 tests (vitest)
+npm test                          # Vitest suites
+npm run test:e2e                   # headless Chromium against real API
 ```
 
 What's covered: exact-equality parsing on a clean ruled fixture; field-accuracy
 on messier borderless/credit-card fixtures; the OCR-only error path; every output
-writer; the full metering math and the mock purchase flow; the API end-to-end via
+writer; durable metering, signed webhooks, duplicate/concurrent/restarted checkout and purchase flows; the API end-to-end via
 Starlette's `TestClient` (including 402 insufficient-credits and 422 unparseable
-paths); and on the frontend, locale parity (no missing/stray/empty keys, real
+paths); 10 bank-inspired synthetic layouts with a strict 100% complete-row gate; and on the frontend, locale parity (no missing/stray/empty keys, real
 translations), pricing math, the localStorage account store, the API form
 builder, and a React component render + interaction test.
 

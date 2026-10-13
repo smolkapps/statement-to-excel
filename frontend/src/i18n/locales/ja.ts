@@ -12,13 +12,13 @@ export const ja: Translation = {
     "会計士・経理担当・財務チームへ。取引の手入力はもう不要です。明細PDFをドロップすれば、日付・摘要・金額・残高がそろった正確な表が手に入ります。",
   hero_cta: "明細を変換する",
   hero_secondary_cta: "料金を見る",
-  hero_trust: "PDFを当社のサーバーにアップロードして変換します。テキスト形式のPDFのみ対応。スキャン画像にはOCRが必要です。",
+  hero_trust: "明細データは保存しません。PDFを当社のサーバーにアップロードして変換し、変換後すぐに削除します。",
 
   feature_accuracy_title: "概算ではなく、正確に",
   feature_accuracy_body:
     "金額は正確な小数として解析します。括弧、末尾のマイナス、DR/CR表記、桁区切りにも対応。借方・貸方の符号も正しく保持します。",
-  feature_private_title: "外部のAIは不要",
-  feature_private_body: "外部のAI APIに明細を送信せず、取引日、摘要、金額、残高を抽出します。",
+  feature_private_title: "明細データを保存しません",
+  feature_private_body: "明細はメモリ内で処理し、変換後すぐに削除します。外部のAI APIに明細を送信することはありません。",
   feature_formats_title: "Excel・CSV・JSON",
   feature_formats_body:
     "集計シート付きの整形済み.xlsx、取り込み用のCSV、独自処理向けのJSONを出力。お使いの会計ソフトもきっと喜びます。",
@@ -62,6 +62,8 @@ export const ja: Translation = {
   pricing_choose_plan: "プランを選ぶ",
   pricing_credits_each: "1クレジットあたり",
   pricing_credit_explainer: "1クレジットで明細1ページを変換。クレジットに有効期限はありません。",
+
+  checkout_error: "決済画面を開けませんでした。もう一度お試しください。",
 
   account_title: "アカウント",
   account_plan: "プラン",

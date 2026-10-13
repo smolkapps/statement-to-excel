@@ -12,13 +12,13 @@ export const es: Translation = {
     "Contables, gestores y equipos financieros: dejen de teclear transacciones a mano. Suelten un PDF del extracto y obtengan una hoja de cálculo ordenada y exacta con cada fecha, concepto, importe y saldo.",
   hero_cta: "Convertir un extracto",
   hero_secondary_cta: "Ver precios",
-  hero_trust: "Tu PDF se sube a nuestro servidor para convertirlo. Solo PDF con texto; los extractos escaneados necesitan OCR.",
+  hero_trust: "No se almacenan datos del extracto. Tu PDF se sube a nuestro servidor para convertirlo y se elimina inmediatamente después.",
 
   feature_accuracy_title: "Exacto, no aproximado",
   feature_accuracy_body:
     "Los importes se analizan como decimales exactos: paréntesis, signo menos al final, marcas DR/CR y separadores de miles, todo gestionado. Los cargos y abonos conservan su signo correcto.",
-  feature_private_title: "No requiere IA de terceros",
-  feature_private_body: "El conversor extrae fechas, descripciones, importes y saldos sin enviar tu extracto a una API de IA de terceros.",
+  feature_private_title: "No almacenamos los datos del extracto",
+  feature_private_body: "Los extractos se procesan en memoria y se eliminan inmediatamente después de la conversión. Nunca enviamos tu extracto a una API de IA de terceros.",
   feature_formats_title: "Excel, CSV o JSON",
   feature_formats_body:
     "Obtén un .xlsx con formato y una hoja de resumen, un CSV simple para importaciones o JSON para tu propio flujo. Tu software contable lo agradecerá.",
@@ -62,6 +62,8 @@ export const es: Translation = {
   pricing_choose_plan: "Elegir plan",
   pricing_credits_each: "por crédito",
   pricing_credit_explainer: "1 crédito convierte 1 página de extracto. Los créditos no caducan.",
+
+  checkout_error: "No se pudo abrir el pago. Inténtalo de nuevo.",
 
   account_title: "Tu cuenta",
   account_plan: "Plan",

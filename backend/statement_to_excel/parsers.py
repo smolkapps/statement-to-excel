@@ -52,6 +52,7 @@ _MONTHS = {
 _NUM_DATE_RE = re.compile(
     r"^\s*(\d{1,4})\s*[/\-.]\s*(\d{1,2})\s*[/\-.]\s*(\d{1,4})\s*$"
 )
+_SHORT_NUM_DATE_RE = re.compile(r"^\s*(\d{1,2})\s*[/\-.]\s*(\d{1,2})\s*$")
 
 # "Mon DD" / "Mon DD YYYY" / "Mon DD, YYYY"  e.g. "Jan 05", "Mar 3, 2024"
 _MON_DAY_RE = re.compile(r"^\s*([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:\s*,?\s*(\d{4}))?\s*$")
@@ -88,6 +89,7 @@ def parse_date(
     Supported formats:
       * ``MM/DD/YYYY`` (US, default) and ``DD/MM/YYYY`` (``dayfirst=True``)
       * ``YYYY-MM-DD`` (ISO, auto-detected by a 4-digit leading group)
+      * ``MM/DD`` only when a statement ``default_year`` is supplied
       * ``Mon DD`` / ``Mon DD, YYYY`` / ``Mon DD YYYY``
       * ``DD Mon YYYY`` / ``DD Mon``
     """
@@ -105,6 +107,12 @@ def parse_date(
         year = _normalize_year(c)
         day, month = (a, b) if dayfirst else (b, a)
         return _make_date(year, month, day)
+
+    m = _SHORT_NUM_DATE_RE.match(s)
+    if m and default_year is not None:
+        a, b = (int(g) for g in m.groups())
+        day, month = (a, b) if dayfirst else (b, a)
+        return _make_date(default_year, month, day)
 
     m = _MON_DAY_RE.match(s)
     if m:

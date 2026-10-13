@@ -1,6 +1,6 @@
 import { useI18n } from "../i18n/I18nContext";
 
-export function Hero() {
+export function Hero({ showPricing = false }: { showPricing?: boolean }) {
   const { t } = useI18n();
   return (
     <section className="hero" id="product">
@@ -11,9 +11,11 @@ export function Hero() {
         <a href="#convert" className="btn btn-primary">
           {t.hero_cta}
         </a>
-        <a href="#pricing" className="btn btn-ghost">
-          {t.hero_secondary_cta}
-        </a>
+        {showPricing && (
+          <a href="#pricing" className="btn btn-ghost">
+            {t.hero_secondary_cta}
+          </a>
+        )}
       </div>
       <p className="trust">{t.hero_trust}</p>
     </section>

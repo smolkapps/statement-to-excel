@@ -6,11 +6,12 @@ import {
   type ConvertJsonResult,
   type OutputFormat,
 } from "../lib/api";
+import { track } from "../lib/analytics";
 
 const CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CNY", "CHF", "CAD", "AUD"];
 
 interface Props {
-  accountId: string;
+  accountId?: string;
   onCharged?: (pages: number) => void;
 }
 
@@ -24,17 +25,24 @@ export function Converter({ accountId, onCharged }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ConvertJsonResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const pendingRef = useRef(false);
+  const [download, setDownload] = useState<{ blob: Blob; filename: string } | null>(null);
+
+  const selectFile = useCallback((selected: File | null) => {
+    if (pendingRef.current) return;
+    setFile(selected);
+    setResult(null);
+    setDownload(null);
+    setError(null);
+    if (selected) track("file-selected");
+  }, []);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) {
-      setFile(f);
-      setResult(null);
-      setError(null);
-    }
-  }, []);
+    const selected = e.dataTransfer.files?.[0];
+    if (selected) selectFile(selected);
+  }, [selectFile]);
 
   const triggerDownload = (blob: Blob, name: string) => {
     const url = URL.createObjectURL(blob);
@@ -48,10 +56,12 @@ export function Converter({ accountId, onCharged }: Props) {
   };
 
   const handleConvert = async () => {
-    if (!file || busy) return;
+    if (!file || pendingRef.current) return;
+    pendingRef.current = true;
     setBusy(true);
     setError(null);
     setResult(null);
+    setDownload(null);
     try {
       // ONE metered call returns the preview rows and (for binary formats)
       // the file itself, so a conversion is charged exactly once.
@@ -61,15 +71,27 @@ export function Converter({ accountId, onCharged }: Props) {
         currency,
       });
       setResult(result);
-      onCharged?.(result.charge?.pages ?? 1);
-      if (blob) triggerDownload(blob, filename);
+      track("convert-success");
+      if (result.charge && result.charge.metered !== false) {
+        onCharged?.(result.charge.pages);
+      }
+      if (blob) {
+        setDownload({ blob, filename });
+        triggerDownload(blob, filename);
+      }
     } catch (err) {
+      track("convert-error");
       if (err instanceof ApiError && err.kind === "insufficient") {
         setError(t.convert_error_insufficient);
+      } else if (err instanceof ApiError && (err.status === 409 || (err.status !== undefined && err.status >= 500))) {
+        setError(t.convert_error_generic);
+      } else if (err instanceof ApiError) {
+        setError(err.message);
       } else {
         setError(t.convert_error_generic);
       }
     } finally {
+      pendingRef.current = false;
       setBusy(false);
     }
   };
@@ -86,7 +108,7 @@ export function Converter({ accountId, onCharged }: Props) {
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
-        onClick={() => inputRef.current?.click()}
+        onClick={() => !pendingRef.current && inputRef.current?.click()}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
@@ -99,12 +121,8 @@ export function Converter({ accountId, onCharged }: Props) {
           type="file"
           accept="application/pdf,.pdf"
           hidden
-          onChange={(e) => {
-            const f = e.target.files?.[0] ?? null;
-            setFile(f);
-            setResult(null);
-            setError(null);
-          }}
+          disabled={busy}
+          onChange={(e) => selectFile(e.target.files?.[0] ?? null)}
         />
         <div className="dropzone-inner">
           <span className="dropzone-icon" aria-hidden="true">
@@ -120,6 +138,7 @@ export function Converter({ accountId, onCharged }: Props) {
           {t.convert_format}
           <select
             value={fmt}
+            disabled={busy}
             onChange={(e) => setFmt(e.target.value as OutputFormat)}
           >
             <option value="xlsx">Excel (.xlsx)</option>
@@ -129,7 +148,7 @@ export function Converter({ accountId, onCharged }: Props) {
         </label>
         <label>
           {t.convert_currency}
-          <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+          <select value={currency} disabled={busy} onChange={(e) => setCurrency(e.target.value)}>
             {CURRENCIES.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -152,6 +171,11 @@ export function Converter({ accountId, onCharged }: Props) {
         </p>
       )}
 
+      {download && (
+        <button className="btn btn-outline" onClick={() => triggerDownload(download.blob, download.filename)}>
+          {t.convert_download}
+        </button>
+      )}
       {result && <ResultsTable result={result} />}
     </section>
   );

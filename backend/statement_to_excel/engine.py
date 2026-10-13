@@ -87,6 +87,22 @@ def summarize(txns: Sequence[Transaction], currency: str = "USD") -> StatementSu
 # Year inference (for "Mon DD" style statements that omit the year per-row)
 # --------------------------------------------------------------------------- #
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+_ACCOUNT_HEADER_RE = re.compile(
+    r"^\s*(?:(?:checking|savings|credit\s+card)\s+)?account\s*"
+    r"(?:number|no\.?|#|ending(?:\s+in)?)?\s*[:#]?\s*"
+    r"([xX*•\d][xX*•\d -]{2,}\d)\b", re.IGNORECASE | re.MULTILINE
+)
+
+
+def _assert_single_account(text: str) -> None:
+    """Never combine identifiable account ledgers without account attribution."""
+    accounts = {re.sub(r"[\s-]", "", match.group(1)).lower()
+                for match in _ACCOUNT_HEADER_RE.finditer(text)}
+    if len(accounts) > 1:
+        raise ConversionError(
+            "Multiple accounts detected. Convert each account's statement separately; "
+            "combined multi-account statements are not supported."
+        )
 
 
 def _infer_year(text: str) -> Optional[int]:
@@ -141,9 +157,10 @@ def _from_tables(
         if max(date_score) == 0 or max(amt_score) == 0:
             continue
 
-        date_col = max(range(ncols), key=lambda j: date_score[j])
-
         header = [h.lower() for h in rows[0]]
+        date_col = _find_header(header, ("posted date", "posting date", "post date"))
+        if date_col is None or not date_score[date_col]:
+            date_col = max(range(ncols), key=lambda j: date_score[j])
         debit_col = _find_header(header, ("debit", "withdrawal", "payment", "charge"))
         credit_col = _find_header(header, ("credit", "deposit"))
         balance_col = _find_header(header, ("balance",))
@@ -166,7 +183,7 @@ def _from_tables(
             if amount is None:
                 continue
             balance = parse_amount(r[balance_col]) if balance_col is not None else None
-            desc = r[desc_col] if desc_col is not None else ""
+            desc = " ".join(r[desc_col].split()) if desc_col is not None else ""
             out.append(
                 Transaction(
                     date=iso,
@@ -214,7 +231,9 @@ def _row_amount(row, debit_col, credit_col, amount_col) -> Optional[Decimal]:
             return -abs(debit)
         if credit is not None and credit != 0:
             return abs(credit)
-        # both empty/zero -> fall through to amount_col if any
+        # An explicitly printed zero adjustment is still a real ledger row.
+        if debit is not None or credit is not None:
+            return Decimal("0")
     if amount_col is not None:
         return parse_amount(row[amount_col])
     return None
@@ -226,7 +245,7 @@ def _row_amount(row, debit_col, credit_col, amount_col) -> Optional[Decimal]:
 # Leading date token, then the rest of the line. We grab trailing amounts later.
 _LEADING_DATE_RE = re.compile(
     r"^\s*("
-    r"\d{1,4}[/\-.]\d{1,2}[/\-.]\d{1,4}"  # 01/02/2024, 2024-01-02
+    r"\d{1,4}[/\-.]\d{1,2}(?:[/\-.]\d{1,4})?"  # short MM/DD needs year hint
     r"|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:,?\s*\d{4})?"  # Jan 5 / Jan 5, 2024
     r"|\d{1,2}\s+[A-Za-z]{3,9}\.?(?:\s+\d{4})?"  # 5 Jan 2024
     r")\s+(.*\S)\s*$"
@@ -252,6 +271,19 @@ _AMOUNT_TOKEN_RE = re.compile(
     r"(?:[$£€¥₩]|R\$|HK\$|US\$)?\s*"
     r"(?:\(|\+|-)?\s*"
     r"\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+\.\d+"
+)
+_PAGE_BOUNDARY = "\x00STX_PAGE_BOUNDARY\x00"
+_SECTION_HEADER_RE = re.compile(
+    r"^(?:page\s+\d+\b|date\b.*\b(?:amount|description)\b|"
+    r"(?:statement|account)\s+(?:period|ending|number|statement)\b|"
+    r".*\b(?:statement|transaction history)\s*$)", re.IGNORECASE
+)
+# Parse amounts as complete suffixes, including spaced currency and DR/CR.
+_AMOUNT_SUFFIX_RE = re.compile(
+    r"(?<!\S)(?:\(\s*)?(?:[+-]\s*)?"
+    r"(?:[$£€¥₩]|R\$|HK\$|US\$)?\s*"
+    r"(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"
+    r"(?:\s*\))?(?:\s*-)?(?:\s*(?:DR|CR))?\s*$", re.IGNORECASE
 )
 
 
@@ -316,6 +348,9 @@ def _parse_rows(
     for raw in lines:
         line = raw.rstrip()
         if not line.strip():
+            continue
+        if line == _PAGE_BOUNDARY or _SECTION_HEADER_RE.match(line.strip()):
+            last_txn = None
             continue
         m = _LEADING_DATE_RE.match(line)
         if not m:
@@ -483,22 +518,35 @@ def _from_lines(
 
 def _trailing_amounts(rest: str) -> List[str]:
     """Return the run of amount-looking tokens at the END of ``rest``."""
-    tokens = rest.split()
-    trailing: List[str] = []
-    for tok in reversed(tokens):
-        if looks_like_amount(tok):
-            trailing.append(tok)
-        else:
+    return [token for _, token in _amount_suffixes(rest)]
+
+
+def _amount_suffixes(rest: str) -> list[tuple[int, str]]:
+    trailing = []
+    remaining = rest.rstrip()
+    while remaining:
+        match = _AMOUNT_SUFFIX_RE.search(remaining)
+        if match is None:
             break
-    trailing.reverse()
-    return trailing
+        token = match.group().strip()
+        if not looks_like_amount(token):
+            break
+        # A bare integer immediately before a monetary amount is commonly a
+        # merchant/reference identifier ("BATCH 42 300.50"), not a balance.
+        if trailing and re.fullmatch(r"\d+", token):
+            break
+        trailing.append((match.start(), token))
+        remaining = remaining[:match.start()].rstrip()
+    return list(reversed(trailing))
 
 
 def _strip_trailing_numbers(rest: str, n: int) -> str:
-    tokens = rest.split()
     if n <= 0:
         return rest.strip()
-    return " ".join(tokens[:-n]).strip()
+    suffixes = _amount_suffixes(rest)
+    if n > len(suffixes):
+        return rest.strip()
+    return " ".join(rest[:suffixes[-n][0]].split())
 
 
 # --------------------------------------------------------------------------- #
@@ -522,6 +570,7 @@ def convert_text(
     neither finds anything.
     """
     hint_text = full_text or ("\n".join(lines) if lines else "")
+    _assert_single_account(hint_text)
     if default_year is None:
         default_year = _infer_year(hint_text)
     if dayfirst is None:
@@ -591,29 +640,81 @@ def convert_pdf(
             "pdfplumber is required to read PDFs. Install with: pip install pdfplumber"
         ) from exc
 
+    from pdfminer.pdfdocument import PDFEncryptionError, PDFPasswordIncorrect
+    from pdfminer.pdfparser import PDFSyntaxError
+    pdf_errors = (PDFPasswordIncorrect, PDFEncryptionError, PDFSyntaxError)
+    try:
+        from pdfplumber.utils.exceptions import PdfminerException
+    except ImportError:  # Older supported pdfplumber versions raise directly.
+        pass
+    else:
+        pdf_errors += (PdfminerException,)
+
     all_lines: List[str] = []
-    all_tables: List[List[List[Optional[str]]]] = []
+    pages = []
     text_parts: List[str] = []
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            txt = page.extract_text() or ""
-            text_parts.append(txt)
-            all_lines.extend(txt.splitlines())
-            for tbl in page.extract_tables() or []:
-                all_tables.append(tbl)
+    try:
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                txt = page.extract_text() or ""
+                if not txt.strip() and page.images:
+                    raise ConversionError(
+                        "A PDF page has no extractable text (scanned/image-only). "
+                        "Run OCR first; mixed scanned/text PDFs cannot be converted safely."
+                    )
+                text_parts.append(txt)
+                page_lines = txt.splitlines()
+                page_tables = page.extract_tables() or []
+                pages.append((page_lines, page_tables, bool(page.images)))
+                # Prevent page headings/footers becoming transaction memos, but
+                # retain the running balance chain across consecutive pages.
+                if all_lines:
+                    all_lines.append(_PAGE_BOUNDARY)
+                all_lines.extend(page_lines)
+    except pdf_errors as exc:
+        error = exc.args[0] if exc.args and isinstance(exc.args[0], Exception) else exc
+        if isinstance(error, (PDFPasswordIncorrect, PDFEncryptionError)):
+            raise ConversionError(
+                "Password-protected PDF. Unlock it locally and upload an unprotected copy."
+            ) from exc
+        raise ConversionError("Invalid or damaged PDF. Upload a valid bank-statement PDF.") from exc
 
     full_text = "\n".join(text_parts)
-    if not full_text.strip() and not all_tables:
+    if not full_text.strip():
         raise ConversionError(
             "No extractable text in PDF (likely a scanned/image-only file). "
             "Run OCR first; OCR is out of scope for this tool."
         )
 
-    return convert_text(
-        full_text=full_text,
-        lines=all_lines,
-        tables=all_tables,
-        currency=currency,
-        dayfirst=dayfirst,
-        default_year=default_year,
-    )
+    _assert_single_account(full_text)
+    if default_year is None:
+        default_year = _infer_year(full_text)
+    if dayfirst is None:
+        dayfirst = _infer_dayfirst(full_text)
+    line_txns = _from_lines(all_lines, currency=currency, dayfirst=dayfirst,
+                            default_year=default_year)
+    # Select per page: one ruled page must not hide transactions on a later
+    # borderless page. Global line parsing above retains cross-page balance signs.
+    chosen = []
+    offset = 0
+    for page_lines, page_tables, has_images in pages:
+        row_count = sum(not row.is_seed for row in _parse_rows(
+            page_lines, dayfirst=dayfirst, default_year=default_year))
+        page_line_txns = line_txns[offset:offset + row_count]
+        offset += row_count
+        table_txns = _from_tables(page_tables, currency=currency, dayfirst=dayfirst,
+                                 default_year=default_year)
+        page_chosen = _choose_strategy(table_txns, page_line_txns)
+        if has_images and not page_chosen:
+            raise ConversionError(
+                "An image-bearing PDF page has no readable transactions. It may "
+                "contain a scanned body beneath selectable headers. Run OCR first "
+                "or upload text-only statement pages; this PDF cannot be converted safely."
+            )
+        chosen.extend(page_chosen)
+    if not chosen:
+        raise ConversionError(
+            "No transactions found. The statement may be image-only (needs OCR) "
+            "or use an unsupported layout."
+        )
+    return chosen

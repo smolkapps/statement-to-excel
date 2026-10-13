@@ -12,13 +12,13 @@ export const en: Translation = {
     "Accountants, bookkeepers and finance teams: stop retyping transactions. Drop a statement PDF, get a tidy, exact spreadsheet with every date, description, amount and balance.",
   hero_cta: "Convert a statement",
   hero_secondary_cta: "See pricing",
-  hero_trust: "Your PDF is uploaded to our server for conversion. Text-based PDFs only; scanned statements need OCR.",
+  hero_trust: "No statement data is stored. Your PDF is uploaded to our server for conversion and deleted right after.",
 
   feature_accuracy_title: "Exact, not approximate",
   feature_accuracy_body:
     "Amounts are parsed as precise decimals — parentheses, trailing minus, DR/CR markers and thousands separators all handled. Debits and credits keep their correct sign.",
-  feature_private_title: "No third-party AI required",
-  feature_private_body: "The converter extracts transaction dates, descriptions, amounts and balances without sending your statement to a third-party AI API.",
+  feature_private_title: "No statement data stored",
+  feature_private_body: "Statements are processed in memory and deleted immediately after conversion. The converter extracts transaction dates, descriptions, amounts and balances without sending your statement to a third-party AI API.",
   feature_formats_title: "Excel, CSV or JSON",
   feature_formats_body:
     "Get a formatted .xlsx with a summary sheet, a plain CSV for imports, or JSON for your own pipeline. Your accounting software will thank you.",
@@ -62,6 +62,8 @@ export const en: Translation = {
   pricing_choose_plan: "Choose plan",
   pricing_credits_each: "per credit",
   pricing_credit_explainer: "1 credit converts 1 statement page. Credits never expire.",
+
+  checkout_error: "Checkout could not be opened. Please try again.",
 
   account_title: "Your account",
   account_plan: "Plan",

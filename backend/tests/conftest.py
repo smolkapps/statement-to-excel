@@ -34,5 +34,19 @@ def fixtures_dir() -> Path:
     return FIX
 
 
+@pytest.fixture
+def configured_provider(monkeypatch):
+    """Opt into metering explicitly; these synthetic values never contact Stripe."""
+    import statement_to_excel.api as api
+    from statement_to_excel.billing import StripeBillingProvider
+
+    provider = StripeBillingProvider(
+        secret_key="sk_test_synthetic_not_a_credential",
+        webhook_secret="whsec_synthetic_not_a_credential",
+    )
+    monkeypatch.setattr(api, "PROVIDER", provider)
+    return provider
+
+
 def load_expected(name: str):
     return json.loads((FIX / f"{name}.expected.json").read_text())

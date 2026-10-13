@@ -65,6 +65,8 @@ export interface Translation {
   pricing_credits_each: string;
   pricing_credit_explainer: string;
 
+  checkout_error: string;
+
   // account
   account_title: string;
   account_plan: string;
