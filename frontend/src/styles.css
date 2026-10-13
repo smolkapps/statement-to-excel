@@ -338,6 +338,28 @@ body {
 .results {
   margin-top: 24px;
 }
+.reconciliation-status {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+.reconciliation-status.not_balanced {
+  border-color: var(--danger);
+}
+.flagged-row,
+.flagged-row:hover {
+  background: rgba(255, 179, 71, 0.12);
+}
+.flagged-row td:first-child {
+  border-left: 3px solid #ffb347;
+}
+.row-flag-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+}
 .summary-strip {
   display: flex;
   flex-wrap: wrap;

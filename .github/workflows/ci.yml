@@ -22,7 +22,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: synthetic-accuracy-report
-          path: work/accuracy/accuracy-report.json
+          path: |
+            work/accuracy/accuracy-report.json
+            work/accuracy/accuracy-family-report.json
+            work/accuracy/accuracy-report.md
   node-frontend:
     runs-on: ubuntu-latest
     steps:

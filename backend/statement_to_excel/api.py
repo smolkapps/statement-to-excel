@@ -198,6 +198,8 @@ def _convert_response(
         raise HTTPException(status_code=422, detail=str(exc))
 
     summary = summarize(txns).to_dict()
+    reconciliation = txns.reconciliation.to_dict()
+    layout = txns.layout
     # Finish serialization first: failed output generation must not spend pages.
     if fmt == "json":
         body = None
@@ -230,6 +232,7 @@ def _convert_response(
         return JSONResponse(content={
             "transactions": [t.to_dict() for t in txns],
             "summary": summary, "charge": charge,
+            "reconciliation": reconciliation, "layout": layout,
         })
 
     if preview:
@@ -237,6 +240,8 @@ def _convert_response(
             content={
                 "transactions": [t.to_dict() for t in txns],
                 "summary": summary,
+                "reconciliation": reconciliation,
+                "layout": layout,
                 "charge": charge,
                 "file_b64": base64.b64encode(body).decode("ascii"),
                 "filename": f"statement.{ext}",

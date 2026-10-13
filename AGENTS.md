@@ -102,7 +102,40 @@ retention and keep their existing durable idempotency guarantees.
 
 No document bytes or extracted transactions are saved. The
 existing single Umami tag receives only `file-selected`, `convert-success`,
-`convert-error`, `upgrade-click`, `checkout-opened`, without document/account data.
+`convert-error`, `upgrade-click`, `checkout-opened`. Only `convert-success` has
+properties: `balanced` (`yes`, `no`, `unknown`) and `layout` (a coarse allowlisted
+ID: `deposit_table`, `deposit_lines`, `card_table`, `card_lines`, `unknown`). Never
+send amounts, dates, names, descriptions, file names or account IDs.
+
+## Reconciliation
+
+Each conversion carries one reconciliation status. `balanced` requires exact
+Decimal agreement between parsed rows and the printed statement evidence:
+opening + money in - money out = closing for deposits, or previous - payments
+and credits + purchases + fees + interest = new balance for cards. Deposit
+opening/closing and every supplied subtotal must agree; card checks require all
+six printed terms. Missing figures are never guessed as zero. `not_balanced`
+includes a signed calculated-minus-printed difference and individual check
+differences; `cannot_check` means required printed totals were not found.
+This arithmetic checks the extraction against totals; it cannot certify every
+description/date or rule out equal and opposite mistakes.
+
+Keep reconciliation a pure function of rows plus extracted totals. Track row
+provenance for inferred December-to-January years, balance-derived signs and
+joined descriptions. Failed checks expose these flags in preview highlights and
+Excel cell notes. Preserve the six-column CSV. JSON and preview include the
+reconciliation and coarse layout; XLSX includes a `Checks` sheet with live
+row-linked formulas and printed comparison values. Keep every workbook part
+in memory and pin `openpyxl>=3.1,<3.2` for the internal writer API.
+
+The synthetic harness reports per family balance rate, exact ordered rows,
+missing/extra rows, silent errors (`balanced` with any wrong row), and false
+alarms (correct rows shown `not_balanced`). Required gates: all ten existing
+layouts and added card/edge families have 100% exact rows, zero silent errors,
+and zero false alarms. Synthetic coverage is not a real-bank accuracy estimate.
+Never commit or upload real statements. Verify backend, frontend/build, harness,
+routing and browser suites; open a generated XLSX and evaluate its Checks
+formulas against printed closing totals before finishing.
 
 Password-protected files require an unlocked copy. Image-only and mixed scanned
 transaction pages require OCR first. Statements with detected distinct account

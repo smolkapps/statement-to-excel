@@ -49,6 +49,13 @@ export const it: Translation = {
   summary_debit: "Totale addebiti",
   summary_credit: "Totale accrediti",
   summary_net: "Netto",
+  reconciliation_balanced_deposit: "I conti tornano: saldo iniziale {opening} + entrate {money_in} − uscite {money_out} = saldo finale {closing}, che corrisponde al tuo estratto conto.",
+  reconciliation_balanced_card: "I conti tornano: saldo precedente {previous} − pagamenti e accrediti {payments_credits} + acquisti {purchases} + commissioni {fees} + interessi {interest} = nuovo saldo {new}, che corrisponde al tuo estratto conto.",
+  reconciliation_not_balanced: "I conti non tornano: la differenza è {difference}. Controlla le righe evidenziate.",
+  reconciliation_cannot_check: "Impossibile verificare: non abbiamo trovato i totali di questo estratto conto. Confronta i numeri prima di usarli.",
+  row_flag_year_inferred_rollover: "Anno dedotto da un periodo tra dicembre e gennaio.",
+  row_flag_sign_from_balance: "Segno dell'importo dedotto dalla variazione del saldo.",
+  row_flag_multiline_description: "Descrizione ottenuta unendo più righe.",
 
   pricing_title: "Prezzi pensati per le aziende",
   pricing_subtitle:

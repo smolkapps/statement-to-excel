@@ -49,6 +49,13 @@ export const ja: Translation = {
   summary_debit: "借方合計",
   summary_credit: "貸方合計",
   summary_net: "差引",
+  reconciliation_balanced_deposit: "一致：期首残高 {opening} + 入金 {money_in} − 出金 {money_out} = 期末残高 {closing} で、明細と一致しています。",
+  reconciliation_balanced_card: "一致：前回残高 {previous} − 支払い・返金 {payments_credits} + 利用額 {purchases} + 手数料 {fees} + 利息 {interest} = 今回残高 {new} で、明細と一致しています。",
+  reconciliation_not_balanced: "不一致：差額は {difference} です。強調表示された行を確認してください。",
+  reconciliation_cannot_check: "確認できません：この明細の合計額が見つかりませんでした。使用する前に数値を照合してください。",
+  row_flag_year_inferred_rollover: "12月から1月にまたがる期間から年を推定しました。",
+  row_flag_sign_from_balance: "残高の変化から金額の符号を推定しました。",
+  row_flag_multiline_description: "複数行の文字をつなげて摘要を作成しました。",
 
   pricing_title: "ビジネス向けの料金",
   pricing_subtitle:

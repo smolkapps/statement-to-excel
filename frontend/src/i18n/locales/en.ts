@@ -49,6 +49,13 @@ export const en: Translation = {
   summary_debit: "Total debit",
   summary_credit: "Total credit",
   summary_net: "Net",
+  reconciliation_balanced_deposit: "Balanced: opening {opening} + money in {money_in} − money out {money_out} = closing {closing}, which matches your statement.",
+  reconciliation_balanced_card: "Balanced: previous balance {previous} − payments and credits {payments_credits} + purchases {purchases} + fees {fees} + interest {interest} = new balance {new}, which matches your statement.",
+  reconciliation_not_balanced: "Doesn't balance: off by {difference}. Check the highlighted rows.",
+  reconciliation_cannot_check: "Can't check: we couldn't find this statement's totals. Compare the numbers before you use them.",
+  row_flag_year_inferred_rollover: "Year inferred across a December–January period.",
+  row_flag_sign_from_balance: "Amount sign inferred from the balance change.",
+  row_flag_multiline_description: "Description joined from several lines.",
 
   pricing_title: "Pricing built for businesses",
   pricing_subtitle:
