@@ -34,20 +34,33 @@ for name, options in [('reconciled', {}), ('off-by-one', {'closing': '111.00'}),
 
 async function visit(page: Page) {
   // Use the existing Umami API locally, without sending test activity externally.
-  await page.route("https://umami.smolkin.org/**", (route) => route.abort());
-  await page.addInitScript(() => {
-    const events: string[] = [];
-    const properties: unknown[] = [];
-    Object.defineProperty(window, "testAnalyticsEvents", { value: events });
-    Object.defineProperty(window, "testAnalyticsProperties", { value: properties });
-    Object.defineProperty(window, "umami", { value: { track: (event: string, data?: unknown) => {
-      events.push(event);
-      if (event === "convert-success") properties.push(data);
-    } } });
-  });
+  // Serve the stub in the page's script context: Camoufox deliberately isolates
+  // addInitScript/evaluate globals from page scripts. DOM attributes let both
+  // browsers inspect the same captured events without enabling main-world eval.
+  await page.route("https://umami.smolkin.org/**", (route) => route.fulfill({
+    contentType: "application/javascript",
+    body: `
+      const events = [];
+      const properties = [];
+      const root = document.documentElement;
+      root.dataset.testAnalyticsEvents = '[]';
+      root.dataset.testAnalyticsProperties = '[]';
+      window.umami = { track: (event, data) => {
+        events.push(event);
+        if (event === 'convert-success') properties.push(data);
+        root.dataset.testAnalyticsEvents = JSON.stringify(events);
+        root.dataset.testAnalyticsProperties = JSON.stringify(properties);
+      } };
+    `,
+  }));
   await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-test-analytics-events", "[]");
   // Await the configured capability response before testing metered conversion.
   await expect(page.locator(".account-chip")).toBeVisible();
+}
+
+async function analytics(page: Page, kind: "events" | "properties") {
+  return JSON.parse((await page.locator("html").getAttribute(`data-test-analytics-${kind}`))!);
 }
 
 async function account(page: Page) {
@@ -105,7 +118,7 @@ print(f'{len(rows)} workbook rows verified')
   expect((await redownloadPromise).suggestedFilename()).toBe("statement.xlsx");
   expect(conversionRequests).toHaveLength(1);
   expect((await account(page)).pages_used_this_cycle).toBe(1);
-  const events = await page.evaluate(() => (window as unknown as { testAnalyticsEvents: string[] }).testAnalyticsEvents);
+  const events = await analytics(page, "events");
   expect(events).toEqual(["file-selected", "convert-success"]);
   await expect(page.locator(".reconciliation-status")).toContainText("Can't check:");
 });
@@ -121,8 +134,56 @@ test("an image-only PDF returns an actionable OCR error without a download or pa
   await expect(page.getByRole("alert")).toContainText(/OCR|text layer|image-only|scanned/i);
   expect(downloads).toHaveLength(0);
   expect((await account(page)).pages_used_this_cycle).toBe(0);
-  const events = await page.evaluate(() => (window as unknown as { testAnalyticsEvents: string[] }).testAnalyticsEvents);
+  const events = await analytics(page, "events");
   expect(events).toEqual(["file-selected", "convert-error"]);
+});
+
+test("a recoverable conversion timeout shows localized guidance and retries once without a lost charge", async ({ page }) => {
+  await visit(page);
+  const requestKeys: (string | undefined)[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/convert") requestKeys.push(request.headers()["idempotency-key"]);
+  });
+  // The real kill/reap/deadline boundary is exercised by backend process tests.
+  // Inject only its HTTP response here to verify the browser's recovery path.
+  await page.route("**/api/convert", (route) => route.fulfill({
+    status: 504, contentType: "application/json",
+    body: JSON.stringify({ detail: "Synthetic server timeout; never show raw internal details" }),
+  }));
+  await page.locator('input[type="file"]').setInputFiles(edgeFixture("reconciled.pdf"));
+  await page.getByLabel("Output format").selectOption("json");
+  const timedOut = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/convert");
+  await page.locator(".convert-controls").getByRole("button", { name: "Convert", exact: true }).click();
+  expect((await timedOut).status()).toBe(504);
+  await expect(page.getByRole("alert")).toHaveText("Conversion took too long. Please try again with a smaller statement or split it into fewer pages.");
+  expect((await account(page)).pages_used_this_cycle).toBe(0);
+  await expect(page.locator(".results")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Download", exact: true })).toHaveCount(0);
+  const localized = new Set<string>();
+  for (const locale of ["en", "zh", "ja", "es", "it"]) {
+    // Select the file and receive the error in this locale; the component keeps
+    // the safe message shown at failure time until another conversion attempt.
+    await page.getByLabel("Select language").selectOption(locale);
+    const timeout = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/convert");
+    await page.locator(".convert-controls button").click();
+    expect((await timeout).status()).toBe(504);
+    const alert = page.getByRole("alert");
+    await expect(alert).toBeVisible();
+    expect(await alert.textContent()).not.toContain("Synthetic server timeout");
+    localized.add((await alert.textContent())!);
+  }
+  expect(localized.size).toBe(5);
+  await page.getByLabel("Select language").selectOption("en");
+  await page.unroute("**/api/convert");
+  const retried = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/convert");
+  const downloaded = page.waitForEvent("download");
+  await page.locator(".convert-controls").getByRole("button", { name: "Convert", exact: true }).click();
+  expect((await retried).status()).toBe(200);
+  expect((await downloaded).suggestedFilename()).toBe("statement.json");
+  await expect(page.locator(".reconciliation-status")).toHaveAttribute("data-status", "balanced");
+  expect((await account(page)).pages_used_this_cycle).toBe(1);
+  expect(requestKeys).toHaveLength(7);
+  expect(new Set(requestKeys).size).toBe(1);
 });
 
 for (const scenario of [
@@ -200,7 +261,7 @@ test("a failed configured checkout rejects a double click and retries its intent
   expect(keys[0]).toBeTruthy();
   expect(keys[1]).toBe(keys[0]);
   expect(await account(page)).toMatchObject({ plan: "free", pro: false, credits: 0, pages_used_this_cycle: 0 });
-  const events = await page.evaluate(() => (window as unknown as { testAnalyticsEvents: string[] }).testAnalyticsEvents);
+  const events = await analytics(page, "events");
   expect(events).toEqual(["upgrade-click", "upgrade-click"]);
 });
 
@@ -232,7 +293,7 @@ for (const scenario of [
       await expect(page.locator(".results tbody tr.flagged-row")).toHaveCount(scenario.flags ? 2 : 0);
     }
     expect(translations.size).toBe(5);
-    const properties = await page.evaluate(() => (window as unknown as { testAnalyticsProperties: unknown[] }).testAnalyticsProperties);
+    const properties = await analytics(page, "properties");
     expect(properties).toEqual([{ balanced: scenario.balanced, layout: "deposit_lines" }]);
   });
 }
@@ -259,6 +320,6 @@ assert workbook['Checks']['B3'].value == 'balanced'
 `, path], { encoding: "utf8" });
   expect(checked.status, checked.stderr).toBe(0);
   expect((await account(page)).pages_used_this_cycle).toBe(1);
-  const properties = await page.evaluate(() => (window as unknown as { testAnalyticsProperties: unknown[] }).testAnalyticsProperties);
+  const properties = await analytics(page, "properties");
   expect(properties).toEqual([{ balanced: "yes", layout: "card_lines" }]);
 });

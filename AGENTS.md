@@ -143,9 +143,34 @@ headers must be split by account; never silently merge account balance chains.
 The accuracy suite checks exact complete ordered rows, including missing/extra
 rows and signs, and requires 100% for its known synthetic ground truth.
 The API rejects statements over **100 pages** with HTTP 413 before transaction
-extraction, in both billing modes. Page counting, PDF parsing, output writing
-and serialization run in a worker thread so a conversion does not block health
-requests on the event loop.
+extraction, in both billing modes. The current owner requires a real bounded
+conversion deadline, superseding the former thread-only conversion boundary.
+Page counting, PDF parsing, reconciliation, output writing, preview/base64 and
+JSON serialization now run in a fresh disposable subprocess. The default
+wall-clock deadline is **30 seconds**, including process startup, IPC and exit;
+`STX_CONVERSION_TIMEOUT_SECONDS` may set a finite value greater than zero and at
+most 120 seconds. Timeout returns recoverable HTTP 504. Timeout and cancellation
+kill the worker's process group and reap it before releasing capacity or closing
+the upload. No abandoned parsing thread continues running. The event loop uses
+asynchronous memory pipes, leaving health requests responsive.
+
+At most **two conversions per ASGI process** are admitted at once, including
+parent billing, response assembly and upload cleanup; excess requests fail
+promptly with HTTP 503 rather than queueing statement bytes. A separate child
+process cap also bounds direct supervisor calls. Total host
+capacity is ASGI worker count multiplied by two. Workers use a **512 MiB address
+space limit**, a CPU-time backstop and disabled core dumps on the supported Linux
+host. Responses are framed and capped at **64 MiB**; oversized output is rejected
+before billing. All PDF, transaction, worksheet and response bytes remain in
+memory; workers import neither API nor ledger/provider modules. Only after a
+complete successful output and worker exit may the parent commit the existing
+retry-safe debit and add the small charge envelope. Timeout, resource failure,
+cancellation during document work and worker crash must not create conversion
+charges or retry rows. Once completed work enters the existing parent billing
+commit, cancellation waits for that commit; a lost response uses the same-key
+retry contract rather than issuing another debit.
+Retain tests that verify the actual child PID is gone, cleanup/capacity recovery,
+health responsiveness, no disk output, and same-key successful retry.
 
 ## Billing
 
@@ -205,3 +230,5 @@ requested goals. Run all applicable suites before opening a PR. Do not merge,
 deploy, alter production configuration or enable live charges without the user's
 explicit authorization. Preserve the SEO canonical/indexing contract, favicons,
 brand, locales and the existing single analytics destination.
+
+Physical-device and simulator testing: Whenever a task needs or would benefit from a physical iPhone, first check whether Michael's N759MS iPhone is connected and available on the host doing the testing, using xcrun devicectl list devices (or xcrun xctrace list devices when appropriate). If N759MS is connected, agents may use it for relevant testing without asking again. Preserve existing device data and unrelated apps; do not erase/reset it. A connected but locked/unpaired device is not usable until that actual condition is resolved. On a host with sufficient measured capacity, especially the Mac Studio, agents may freely use iOS and Android simulators/emulators for relevant tests without additional permission. Inspect host load and memory first, use conservative concurrency, and distinguish simulator checks from real physical-device checks. Cloud environments without device access must report that limitation, never claim a phone test occurred. Existing App Store publication gates still apply.

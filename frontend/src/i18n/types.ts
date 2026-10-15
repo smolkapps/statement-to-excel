@@ -41,6 +41,7 @@ export interface Translation {
   convert_processing: string;
   convert_download: string;
   convert_error_generic: string;
+  convert_error_timeout: string;
   convert_error_insufficient: string;
   convert_results_title: string;
   col_date: string;

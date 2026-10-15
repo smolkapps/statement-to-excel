@@ -9,6 +9,7 @@ import {
   fetchCheckoutAvailability,
   fetchCheckoutStatus,
   openCheckout,
+  type OutputFormat,
 } from "./api";
 
 // jsdom's Blob has no .text(); read via FileReader (what browsers also support).
@@ -164,6 +165,29 @@ describe("convertStatement", () => {
     await convertStatement(file, opts);
     expect((fetchMock.mock.calls[0][1] as RequestInit).headers)
       .toEqual((fetchMock.mock.calls[1][1] as RequestInit).headers);
+  });
+
+  it.each<OutputFormat>(["xlsx", "csv", "json"])("preserves a %s timeout status and reuses the same key for retry", async (fmt) => {
+    const file = new File(["synthetic"], "retry.pdf");
+    const opts = { accountId: "timeout_retry", fmt, currency: "USD" };
+    const detail = "Conversion took too long. Please try again with a smaller statement or split it into fewer pages.";
+    const fetchMock = vi.fn().mockResolvedValueOnce(fakeResponse(504, { detail }))
+      .mockResolvedValueOnce(fakeResponse(200, {
+        transactions: rows, summary, charge,
+        ...(fmt === "json" ? {} : { file_b64: btoa("converted-output") }),
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(convertStatement(file, opts)).rejects.toMatchObject({
+      name: "ApiError", kind: "parse", status: 504, message: detail,
+    });
+    const retried = await convertStatement(file, opts);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((fetchMock.mock.calls[0][1] as RequestInit).headers)
+      .toEqual((fetchMock.mock.calls[1][1] as RequestInit).headers);
+    expect(retried.result.transactions).toEqual(rows);
+    expect(retried.blob).toBeInstanceOf(Blob);
   });
 
   it("fetches authoritative account state and sends checkout intents to Stripe configuration", async () => {

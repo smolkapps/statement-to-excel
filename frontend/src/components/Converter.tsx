@@ -89,6 +89,8 @@ export function Converter({ accountId, onCharged }: Props) {
       track("convert-error");
       if (err instanceof ApiError && err.kind === "insufficient") {
         setError(t.convert_error_insufficient);
+      } else if (err instanceof ApiError && err.status === 504) {
+        setError(t.convert_error_timeout);
       } else if (err instanceof ApiError && (err.status === 409 || (err.status !== undefined && err.status >= 500))) {
         setError(t.convert_error_generic);
       } else if (err instanceof ApiError) {

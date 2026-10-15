@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import statement_to_excel.api as api
+from statement_to_excel.conversion_timeout import ConversionWorkerError
 import statement_to_excel.billing as billing
 from statement_to_excel.billing import (
     CONVERSION_IDEMPOTENCY_TTL_SECONDS as TTL,
@@ -163,9 +164,9 @@ def test_every_failed_conversion_request_purges_expired_metadata(ledger, clock, 
     if failure == "quota":
         ledger.charge_pages("request-account", 3)
     if failure == "writer":
-        def fail_writer(*args):
-            raise RuntimeError("synthetic writer failure")
-        monkeypatch.setattr(api, "to_xlsx_bytes", fail_writer)
+        async def fail_writer(*args):
+            raise ConversionWorkerError()
+        monkeypatch.setattr(api, "run_conversion", fail_writer)
     with TestClient(api.app, raise_server_exceptions=False) as client:
         if failure == "missing-file":
             response = client.post("/api/convert", data={"fmt": "csv"})

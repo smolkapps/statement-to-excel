@@ -9,6 +9,7 @@ from contextlib import closing
 from io import BytesIO
 import csv
 import tempfile
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +17,8 @@ from reportlab.pdfgen import canvas
 import starlette.formparsers as formparsers
 
 import statement_to_excel.api as api
+import statement_to_excel.conversion as conversion
+import statement_to_excel.conversion_timeout as deadline
 from statement_to_excel.billing import PersistentLedger, StripeBillingProvider
 
 
@@ -127,6 +130,11 @@ def test_valid_large_multipart_pdf_converts_without_a_temporary_disk_file(
     client, ledger, metered = conversion_client
     data, expected = _statement(exact_bytes=size)
     spools, rollovers, disk_allocations = _reject_disk_spooling(monkeypatch)
+    # Exec workers do not inherit parent monkeypatches. Install the same disk
+    # allocator guards inside the actual child for the accepted upload path.
+    monkeypatch.setattr(deadline, "_worker_command", lambda: [
+        sys.executable, "-m", "tests.deadline_worker", "no_disk", "0",
+    ])
     response = client.post("/api/convert", files={
         "file": ("synthetic-padded.pdf", data, "application/pdf"),
     }, data={"account_id": ACCOUNT, "fmt": fmt})
@@ -168,9 +176,9 @@ def test_more_than_20_mib_rejected_before_pdf_conversion_without_disk_or_charge(
     data, _ = _statement(exact_bytes=20 * MIB + 1)
     before = _snapshot(ledger)
     spools, rollovers, disk_allocations = _reject_disk_spooling(monkeypatch)
-    def forbidden_parse(*args, **kwargs):
-        raise AssertionError("An oversized PDF must be rejected before transaction conversion")
-    monkeypatch.setattr(api, "convert_pdf", forbidden_parse)
+    async def forbidden_parse(*args, **kwargs):
+        raise AssertionError("An oversized PDF must be rejected before the conversion worker")
+    monkeypatch.setattr(api, "run_conversion", forbidden_parse)
     response = client.post("/api/convert", files={
         "file": ("synthetic-over-limit.pdf", data, "application/pdf"),
     }, data={"account_id": ACCOUNT, "fmt": "json"},
@@ -215,7 +223,11 @@ def test_101_page_pdf_rejected_before_transaction_conversion_and_never_charged(
     before = _snapshot(ledger)
     def forbidden_parse(*args, **kwargs):
         raise AssertionError("More than 100 PDF pages must be rejected before transaction conversion")
-    monkeypatch.setattr(api, "convert_pdf", forbidden_parse)
+    # Verify the page-count guard independently of the subprocess boundary.
+    monkeypatch.setattr(conversion, "convert_pdf", forbidden_parse)
+    with pytest.raises(conversion.ConversionRejected) as rejected:
+        conversion.prepare_conversion(data, "json", "USD", False)
+    assert rejected.value.status_code == 413
     response = client.post("/api/convert", files={
         "file": ("synthetic-101-pages.pdf", data, "application/pdf"),
     }, data={"account_id": ACCOUNT, "fmt": "json"},

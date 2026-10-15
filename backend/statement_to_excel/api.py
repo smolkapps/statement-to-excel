@@ -11,7 +11,8 @@ Endpoints
 ``POST /api/stripe/webhook``          signed payment -> exactly-once entitlement
 ``POST /api/convert``                 multipart PDF upload -> metered conversion
 
-Conversion and output generation run locally in memory. Usage is charged only
+Conversion and output generation run in a deadline-limited subprocess using
+memory-only pipes. Usage is charged only
 after successful output generation. Optional Idempotency-Key prevents repeat
 usage debits for 24 hours after creation; replay does not extend that window.
 Billing stores metadata only. Until Stripe test Checkout and signed webhooks are
@@ -20,10 +21,11 @@ configured, conversions are unmetered and write no account or conversion records
 
 from __future__ import annotations
 
-import base64
+import asyncio
 import hashlib
-import io
+import json
 import os
+import threading
 from typing import Annotated, Optional
 
 from anyio import CancelScope
@@ -39,16 +41,15 @@ from .billing import (
     BillingError, InsufficientCredits, PersistentLedger, PRICING, StripeBillingProvider,
     apply_webhook, checkout_status, create_checkout, get_provider,
 )
-from .engine import ConversionError, convert_pdf, summarize
-from .writers import to_csv_bytes, to_xlsx_bytes
+from .conversion import MAX_UPLOAD_BYTES, MAX_STATEMENT_PAGES, ConversionArtifact, ConversionRejected
+from .conversion_timeout import MAX_CONCURRENT_CONVERSIONS, ConversionBusy, run_conversion
 
 # SQLite persists billing and metering metadata only. Uploads and converted
 # transaction rows must never enter the ledger or provider.
 LEDGER = PersistentLedger(os.getenv("STX_BILLING_DATABASE", "var/billing.sqlite3"))
 PROVIDER = get_provider()
+_admission = threading.BoundedSemaphore(MAX_CONCURRENT_CONVERSIONS)
 
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-MAX_STATEMENT_PAGES = 100
 # Starlette's file parser uses this supported class setting when it constructs
 # SpooledTemporaryFile. Keep every accepted PDF in memory; oversized rejected
 # uploads can still spill and are closed/deleted by the cleanup below.
@@ -159,59 +160,18 @@ def get_checkout_status(session_id: str, account_id: str) -> dict:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
-def _count_pages(data: bytes) -> int:
-    """Count page metadata, stopping at the first page beyond the limit.
-
-    Password/format failures are left to the converter's existing clear 422
-    errors. Iterate pdfminer's page metadata directly: pdfplumber.close() would
-    materialize the entire page list, defeating an early bounded count.
-    """
-    try:
-        from pdfminer.pdfpage import PDFPage
-
-        with io.BytesIO(data) as stream:
-            pages = sum(1 for _ in PDFPage.get_pages(stream, maxpages=MAX_STATEMENT_PAGES + 1))
-        return max(1, pages)
-    except Exception:
-        return 1
-
-
 def _convert_response(
+    artifact: ConversionArtifact,
     data: bytes,
     account_id: str,
     fmt: str,
     currency: str,
-    preview: bool,
     idempotency_key: Optional[str],
     metered: bool,
     ledger,
 ) -> Response:
-    """Run PDF work, output encoding and metering entirely in a worker thread."""
-    pages = _count_pages(data)
-    if pages > MAX_STATEMENT_PAGES:
-        raise HTTPException(status_code=413, detail="PDF statements are limited to 100 pages")
-
-    # Parse first; only charge on success.
-    try:
-        txns = convert_pdf(io.BytesIO(data), currency=currency)
-    except ConversionError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-    summary = summarize(txns).to_dict()
-    reconciliation = txns.reconciliation.to_dict()
-    layout = txns.layout
-    # Finish serialization first: failed output generation must not spend pages.
-    if fmt == "json":
-        body = None
-        media = "application/json"
-    elif fmt == "csv":
-        body = to_csv_bytes(txns)
-        media = "text/csv"
-    else:
-        body = to_xlsx_bytes(txns)
-        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    ext = fmt
-
+    """Commit usage only after the killable worker completely finishes output."""
+    pages = artifact.pages
     charge = {"metered": False, "pages": pages}
     if metered:
         try:
@@ -228,34 +188,41 @@ def _convert_response(
                 "error": "insufficient_credits", "detail": str(exc), "quote": acct.quote(pages),
             })
 
-    if fmt == "json":
-        return JSONResponse(content={
-            "transactions": [t.to_dict() for t in txns],
-            "summary": summary, "charge": charge,
-            "reconciliation": reconciliation, "layout": layout,
-        })
-
-    if preview:
-        return JSONResponse(
-            content={
-                "transactions": [t.to_dict() for t in txns],
-                "summary": summary,
-                "reconciliation": reconciliation,
-                "layout": layout,
-                "charge": charge,
-                "file_b64": base64.b64encode(body).decode("ascii"),
-                "filename": f"statement.{ext}",
-                "media_type": media,
-            }
-        )
+    if artifact.media_type == "application/json":
+        # The child already serialized every transaction/preview byte. Only the
+        # small billing envelope remains; never re-run document work after debit.
+        charge_json = json.dumps(charge, separators=(",", ":")).encode("utf-8")
+        body = b'{"charge":' + charge_json + b"," + artifact.body[1:]
+        return Response(content=body, media_type="application/json")
 
     headers = {
-        "Content-Disposition": f'attachment; filename="statement.{ext}"',
-        "X-Transaction-Count": str(summary["count"]),
+        "Content-Disposition": f'attachment; filename="statement.{fmt}"',
+        "X-Transaction-Count": str(artifact.transaction_count),
     }
     if metered:
         headers["X-Credits-Remaining"] = str(charge["credits_after"])
-    return Response(content=body, media_type=media, headers=headers)
+    return Response(content=artifact.body, media_type=artifact.media_type, headers=headers)
+
+
+async def _finish_response(*args) -> Response:
+    """Keep admission until the small parent commit finishes, even on disconnect.
+
+    Once successful document work reaches billing, existing idempotency governs
+    a lost response. Cancelling a request must not leave an untracked billing
+    thread holding document bytes after its admission slot was released.
+    """
+    cancelled = False
+    with CancelScope(shield=True):
+        finalizer = asyncio.create_task(run_in_threadpool(_convert_response, *args))
+        while not finalizer.done():
+            try:
+                await asyncio.shield(finalizer)
+            except asyncio.CancelledError:
+                cancelled = True
+        response = finalizer.result()
+    if cancelled:
+        raise asyncio.CancelledError
+    return response
 
 
 @app.post("/api/convert")
@@ -271,7 +238,12 @@ async def convert(
     response is JSON carrying both the parsed rows *and* the file
     base64-inline, so a UI can show the preview table and offer the download
     from one call — charging the account once instead of twice."""
+    admitted = False
     try:
+        if not _admission.acquire(blocking=False):
+            busy = ConversionBusy()
+            raise HTTPException(status_code=busy.status_code, detail=busy.detail)
+        admitted = True
         metered = checkout_available()
         fmt = (fmt or "xlsx").lower()
         if fmt not in {"xlsx", "csv", "json"}:
@@ -285,15 +257,23 @@ async def convert(
 
         if idempotency_key is not None and not 16 <= len(idempotency_key) <= 200:
             raise HTTPException(status_code=400, detail="Idempotency-Key must be 16 to 200 characters")
-        return await run_in_threadpool(
-            _convert_response, data, account_id, fmt, currency, preview,
+        try:
+            artifact = await run_conversion(data, fmt, currency, preview)
+        except ConversionRejected as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return await _finish_response(
+            artifact, data, account_id, fmt, currency,
             idempotency_key, metered, LEDGER,
         )
     finally:
         # Closing releases memory and deletes rejected or forced disk spills.
         # Shield the worker-thread close so cancellation cannot skip cleanup.
-        with CancelScope(shield=True):
-            await file.close()
+        try:
+            with CancelScope(shield=True):
+                await file.close()
+        finally:
+            if admitted:
+                _admission.release()
 
 
 def create_app() -> FastAPI:
