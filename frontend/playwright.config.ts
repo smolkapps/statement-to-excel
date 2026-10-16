@@ -14,7 +14,7 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: "list",
-  outputDir: "../work/playwright-results",
+  outputDir: process.env.STX_E2E_OUTPUT_DIR || "../work/playwright-results",
   use: {
     baseURL: "http://127.0.0.1:4173",
     browserName: camoufoxPath ? "firefox" : "chromium",
@@ -24,6 +24,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
+    { name: "analytics-privacy", testMatch: "analytics.spec.ts", use: { baseURL: "http://127.0.0.1:4175" } },
     {
       name: "configured-billing",
       testMatch: "conversion.spec.ts",
@@ -36,6 +37,7 @@ export default defineConfig({
     },
   ],
   webServer: [
+    { command: "node e2e/start-stack.mjs --configured --analytics --port=4175", url: "http://127.0.0.1:4175/api/health", reuseExistingServer: false, timeout: 30_000 },
     {
       command: "node e2e/start-stack.mjs --port=4173",
       url: "http://127.0.0.1:4173/api/health",

@@ -46,6 +46,7 @@ async function visit(page: Page) {
       root.dataset.testAnalyticsEvents = '[]';
       root.dataset.testAnalyticsProperties = '[]';
       window.umami = { track: (event, data) => {
+        if (!event) return;
         events.push(event);
         if (event === 'convert-success') properties.push(data);
         root.dataset.testAnalyticsEvents = JSON.stringify(events);
@@ -66,7 +67,7 @@ async function analytics(page: Page, kind: "events" | "properties") {
 async function account(page: Page) {
   const id = await page.evaluate(() => localStorage.getItem("stx_account_id"));
   expect(id).toMatch(/^web_/);
-  const response = await page.request.get(`/api/account/${id}`);
+  const response = await page.request.post("/api/account", { data: { account_id: id } });
   expect(response.ok()).toBeTruthy();
   return response.json();
 }
@@ -322,4 +323,48 @@ assert workbook['Checks']['B3'].value == 'balanced'
   expect((await account(page)).pages_used_this_cycle).toBe(1);
   const properties = await analytics(page, "properties");
   expect(properties).toEqual([{ balanced: "yes", layout: "card_lines" }]);
+});
+
+test('owned hosted payment management uses private account body and a recoverable failure', async ({ page }) => {
+  await page.route('**/api/account', route => route.fulfill({ json: {
+    id: route.request().postDataJSON().account_id, plan: 'starter', credits: 50,
+    included_pages: 120, pages_used_this_cycle: 2, included_remaining: 118, pro: true,
+    management_available: true, billing_hold: false,
+  } }));
+  const bodies: object[] = [];
+  let fail = true;
+  await page.route('**/api/billing/portal', route => {
+    bodies.push(route.request().postDataJSON());
+    return route.fulfill(fail ? { status: 503, json: { detail: 'Synthetic provider unavailable' } } : { json: { portal_url: 'https://billing.stripe.com/synthetic-management' } });
+  });
+  await page.route('https://billing.stripe.com/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Synthetic hosted management</h1>' }));
+  await visit(page);
+  const manage = page.getByRole('button', { name: 'Manage subscription and payment method' });
+  await manage.click();
+  await expect(page.getByRole('alert')).toHaveText('Checkout could not be opened. Please try again.');
+  fail = false;
+  await manage.click();
+  await expect(page.getByRole('heading', { name: 'Synthetic hosted management' })).toBeVisible();
+  expect(bodies).toHaveLength(2);
+  expect(Object.keys(bodies[0])).toEqual(['account_id']);
+  expect(bodies[0]).toEqual(bodies[1]);
+});
+
+test('a payment-reconciliation hold gives localized guidance without charges or a download', async ({ page }) => {
+  await visit(page);
+  await page.route('**/api/convert', route => route.fulfill({ status: 409, json: { error: 'billing_hold', detail: 'Synthetic private provider detail' } }));
+  await page.locator('input[type=file]').setInputFiles(edgeFixture('reconciled.pdf'));
+  const messages = new Set<string>(); const downloads: string[] = [];
+  page.on('download', d => downloads.push(d.suggestedFilename()));
+  for (const locale of ['en', 'zh', 'ja', 'es', 'it']) {
+    await page.getByLabel('Select language').selectOption(locale);
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/convert');
+    await page.locator('.convert-controls button').click();
+    expect((await response).status()).toBe(409);
+    const alert = page.getByRole('alert'); await expect(alert).toBeVisible();
+    messages.add(await alert.innerText());
+    expect(await alert.innerText()).not.toContain('Synthetic private provider detail');
+  }
+  expect(messages.size).toBe(5); expect(downloads).toEqual([]);
+  expect((await account(page)).pages_used_this_cycle).toBe(0);
 });

@@ -4,6 +4,8 @@ import App from "./App";
 import { I18nProvider } from "./i18n/I18nContext";
 import { detectInitialLocale } from "./i18n";
 import "./styles.css";
+import { initializeAnalytics } from "./lib/analytics";
+try { initializeAnalytics(); } catch { /* tracking is optional */ }
 
 const initial = detectInitialLocale();
 if (typeof document !== "undefined") {

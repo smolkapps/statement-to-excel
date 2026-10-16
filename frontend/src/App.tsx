@@ -6,9 +6,11 @@ import { Converter } from "./components/Converter";
 import { Pricing } from "./components/Pricing";
 import { AccountChip } from "./components/AccountChip";
 import { useI18n } from "./i18n/I18nContext";
-import { fetchAccount, fetchCheckoutAvailability, fetchCheckoutStatus, navigateCheckout, openCheckout } from "./lib/api";
+import { fetchAccount, fetchCheckoutAvailability, fetchCheckoutStatus, navigateCheckout, openCheckout, openPortal, billingMode } from "./lib/api";
 import { track } from "./lib/analytics";
 import { newAccount, type AccountState } from "./lib/pricing";
+import { captureCheckoutReturn, persistentAccount } from "./lib/privacy";
+import { PrivacyControls } from "./components/PrivacyControls";
 
 // The anonymous account id is a capability: possession permits using its
 // allowance. Never use a shared fallback id or guessable Math.random id.
@@ -62,6 +64,11 @@ export default function App() {
   const [checkoutAvailable, setCheckoutAvailable] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [checkoutError, setCheckoutError] = useState(false);
+  const [storageError, setStorageError] = useState(false);
+  const [mode, setMode] = useState("test");
+  const [returning] = useState(captureCheckoutReturn);
+  const [managementAvailable, setManagementAvailable] = useState(false);
+  const [billingHold, setBillingHold] = useState(false);
   const billingActive = useRef(false);
   const checkoutPending = useRef(false);
   const accountRequestSequence = useRef(0);
@@ -75,6 +82,7 @@ export default function App() {
       if (available) {
         billingActive.current = true;
         setCheckoutAvailable(true);
+        setMode(billingMode);
       }
     }).catch(() => {
       // A failed availability request leaves billing hidden and conversion usable.
@@ -89,7 +97,7 @@ export default function App() {
     if (!billingActive.current || !accountId) return;
     const status = await fetchCheckoutStatus(accountId, sessionId);
     if (!billingActive.current) return;
-    if (status.status !== "fulfilled" && status.status !== "expired" && status.status !== "cancelled") return;
+    if (!["fulfilled", "expired", "cancelled", "reversed"].includes(status.status)) return;
     const saved = checkoutSessions.current.get(status.sku) ?? savedCheckout(accountId, status.sku);
     // A replayed URL for an older paid session must not clear a newer intent.
     if (!saved || saved.sessionId !== status.session_id) return;
@@ -117,28 +125,32 @@ export default function App() {
       credits: state.credits,
       pagesUsedThisCycle: state.pages_used_this_cycle,
     });
+    setManagementAvailable(state.management_available === true);
+    setBillingHold(state.billing_hold === true);
   }, [accountId]);
 
   useEffect(() => {
     if (!checkoutAvailable || !accountId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const params = new URLSearchParams(window.location.search);
-    const returning = params.get("checkout") === "success";
-    const returningSession = params.get("session_id");
-    let attempts = returning ? 10 : 1;
+    const returningSession = returning.sessionId;
+    let attempts = returning.returning ? 10 : 1;
     const refresh = async () => {
       try {
         if (returningSession) await reconcileCheckout(returningSession).catch(() => {});
         if (cancelled || !billingActive.current) return;
         const sequence = ++accountRequestSequence.current;
         const state = await fetchAccount(accountId);
-        if (!cancelled && billingActive.current && sequence === accountRequestSequence.current) setAccount({
+        if (!cancelled && billingActive.current && sequence === accountRequestSequence.current) {
+          setManagementAvailable(state.management_available === true);
+          setBillingHold(state.billing_hold === true);
+          setAccount({
           pro: state.pro,
           planId: state.plan,
           credits: state.credits,
           pagesUsedThisCycle: state.pages_used_this_cycle,
-        });
+          });
+        }
       } catch { /* conversion/checkout show their own actionable service errors */ }
       if (!cancelled && billingActive.current && --attempts > 0) timer = setTimeout(refresh, 2000);
     };
@@ -150,10 +162,12 @@ export default function App() {
       if (timer) clearTimeout(timer);
       window.removeEventListener("focus", onFocus);
     };
-  }, [accountId, checkoutAvailable, refreshAccount, reconcileCheckout]);
+  }, [accountId, checkoutAvailable, refreshAccount, reconcileCheckout, returning]);
 
   const handleCheckout = async (sku: string) => {
     if (!billingActive.current || !accountId || sku === "free" || checkoutPending.current) return;
+    if (!persistentAccount(accountId)) { setStorageError(true); return; }
+    setStorageError(false);
     checkoutPending.current = true;
     setCheckoutBusy(true);
     setCheckoutError(false);
@@ -186,6 +200,13 @@ export default function App() {
     <div className="app" id="top">
       <Header showPricing={checkoutAvailable} />
       {checkoutAvailable && <AccountChip account={account} />}
+      {checkoutAvailable && mode === "test" && <p className="billing-notice">{t.billing_test_mode}</p>}
+      {checkoutAvailable && managementAvailable && <button className="btn btn-outline manage-payment" disabled={checkoutBusy} onClick={async () => {
+        if (!persistentAccount(accountId)) { setStorageError(true); return; }
+        setCheckoutBusy(true); setCheckoutError(false);
+        try { navigateCheckout(await openPortal(accountId)); } catch { setCheckoutError(true); } finally { setCheckoutBusy(false); }
+      }}>{t.billing_manage}</button>}
+      {checkoutAvailable && billingHold && <p className="convert-error" role="alert">{t.billing_hold}</p>}
       <main>
         <Hero showPricing={checkoutAvailable} />
         <Features />
@@ -195,8 +216,10 @@ export default function App() {
           <Pricing onBuyPack={handleCheckout} onChoosePlan={handleCheckout} busy={checkoutBusy} />
         )}
         {checkoutAvailable && checkoutError && <p className="convert-error" role="alert">{t.checkout_error}</p>}
+        {checkoutAvailable && storageError && <p className="convert-error" role="alert">{t.billing_storage_error}</p>}
       </main>
       <footer className="site-footer">
+        <PrivacyControls />
         <p>{t.footer_tagline}</p>
         <p className="muted">
           © {new Date().getFullYear()} statement-to-excel. {t.footer_rights}

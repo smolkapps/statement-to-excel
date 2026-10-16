@@ -91,7 +91,7 @@ export interface ParseError {
   kind: "parse";
   detail: string;
 }
-export type ConvertError = InsufficientError | ParseError;
+export type ConvertError = InsufficientError | ParseError | { kind: "billing_hold"; detail: string };
 
 export class ApiError extends Error {
   constructor(
@@ -105,8 +105,9 @@ export class ApiError extends Error {
 }
 
 async function throwApiError(res: Response): Promise<never> {
-  const body = await res.json().catch(() => ({})) as { detail?: unknown };
+  const body = await res.json().catch(() => ({})) as { detail?: unknown; error?: unknown };
   const detail = typeof body.detail === "string" ? body.detail : `request failed (${res.status})`;
+  if (res.status === 409 && body.error === "billing_hold") throw new ApiError("billing_hold", detail, res.status);
   if (res.status === 402) {
     throw new ApiError("insufficient", detail, res.status);
   }
@@ -213,17 +214,19 @@ export interface ServerAccount {
   pages_used_this_cycle: number;
   included_remaining: number;
   pro: boolean;
+  billing_hold?: boolean;
+  management_available?: boolean;
 }
 
 export interface CheckoutSession {
   session_id: string;
   checkout_url: string;
   provider: "stripe";
-  mode: "test";
+  mode: "test" | "live";
 }
 
 export async function fetchAccount(accountId: string): Promise<ServerAccount> {
-  const response = await fetch(apiUrl(`/api/account/${encodeURIComponent(accountId)}`));
+  const response = await fetch(apiUrl("/api/account"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account_id: accountId }) });
   if (!response.ok) await throwApiError(response);
   return response.json() as Promise<ServerAccount>;
 }
@@ -255,20 +258,32 @@ export function navigateCheckout(url: string): void {
 export interface CheckoutStatus {
   session_id: string;
   sku: string;
-  status: "pending" | "fulfilled" | "expired" | "cancelled";
+  status: "pending" | "fulfilled" | "expired" | "cancelled" | "reversed";
 }
 
 export async function fetchCheckoutStatus(accountId: string, sessionId: string): Promise<CheckoutStatus> {
-  const response = await fetch(apiUrl(`/api/checkout/${encodeURIComponent(sessionId)}?account_id=${encodeURIComponent(accountId)}`));
+  const response = await fetch(apiUrl("/api/checkout/status"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account_id: accountId, session_id: sessionId }) });
   if (!response.ok) await throwApiError(response);
   return response.json() as Promise<CheckoutStatus>;
 }
 
 
+export let billingMode: "test" | "live" = "test";
+
 /** Billing stays hidden unless the backend explicitly advertises availability. */
 export async function fetchCheckoutAvailability(): Promise<boolean> {
   const response = await fetch(apiUrl("/api/pricing"));
   if (!response.ok) await throwApiError(response);
-  const pricing = await response.json() as { checkout_available?: unknown };
+  const pricing = await response.json() as { checkout_available?: unknown; billing_mode?: unknown };
+  billingMode = pricing.billing_mode === "live" ? "live" : "test";
   return pricing.checkout_available === true;
+}
+
+export async function openPortal(accountId: string): Promise<string> {
+  const response = await fetch(apiUrl("/api/billing/portal"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ account_id: accountId }) });
+  if (!response.ok) await throwApiError(response);
+  const { portal_url } = await response.json() as { portal_url: string };
+  const url = new URL(portal_url);
+  if (url.protocol !== "https:" || url.hostname !== "billing.stripe.com") throw new Error("Invalid payment management URL");
+  return portal_url;
 }

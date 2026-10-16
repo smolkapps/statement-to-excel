@@ -174,54 +174,113 @@ health responsiveness, no disk output, and same-key successful retry.
 
 ## Billing
 
-Billing stays in **Stripe test mode until Michael approves live charges**.
-This implementation rejects live keys and live webhook events; no configuration
-switch enables live payments. Mock billing is only an explicitly injected test
-double, not a supported deployment provider.
+The owner explicitly authorized implementation of live/test billing on October
+16, 2026, superseding the former test-only prohibition. Parent retains credentials,
+provider/account settings, independent review, merge and deployment authority.
+Agents open PRs only; no live purchases/refunds or provider/configuration changes.
 
-The service has two modes, controlled by the Stripe provider's single
-`checkout_available` configuration rule. Both `GET /api/pricing` and
-`GET /api/health` expose that boolean without exposing credentials.
+`STX_STRIPE_MODE=test` is the default; `live` requires a matching `sk_live_` key.
+Both modes require matching secret and signed webhook configuration. Missing
+credentials preserve unmetered conversion and hidden billing. Invalid/mismatched
+configuration fails closed at startup. Both secrets also require an app-specific
+hosted portal configuration; subscription checkout validates its features before
+creating a payable session. `/api/health` and `/api/pricing` advertise
+`checkout_available` and `billing_mode`; availability means configuration, not a
+successful provider connectivity test. Mock billing is an injected test double.
 
-- **Checkout unavailable:** production runs with `STX_BILLING_PROVIDER=stripe`
-  and remains **unmetered until Stripe test credentials and the webhook are
-  configured**. Missing either an `sk_test_` secret key or a `whsec_` webhook
-  secret makes `checkout_available=false`. Valid statements up to 100 pages
-  convert with the same 20 MiB upload limit, PDF validation, output formats and
-  upload deletion.
-  Conversion returns `charge: {"metered": false, "pages": N}` and never consumes
-  allowance/credits or returns 402. Requests write no account, conversion-charge
-  or checkout rows; cleanup of previously expired fingerprints may still run.
-  The frontend reads `/api/pricing` on load, treating failure as unavailable;
-  it hides pricing navigation, the hero pricing button, Pricing and the account
-  chip, and makes no account or checkout requests.
-- **Checkout available:** both credentials satisfy the existing Stripe test
-  configuration rule. `checkout_available=true` enables the existing three-page
-  free allowance, plan/credit metering, 24-hour conversion idempotency and 402
-  responses when allowance/credits are exhausted. Checkout creation and paid
-  webhooks retain their durable purchase/Pro idempotency guarantees. Frontend
-  checkout failures use the localized `checkout_error` copy, never raw backend
-  billing text. Availability indicates configuration, not a successful remote
-  Stripe connectivity test.
+Preserve all catalog numbers: Free 3 pages, Starter $29/month/120 pages, Business
+$79/500 and Firm $199/2000; packs 50/$30, 200/$100, 1000/$400. After included
+pages, debit **one prepaid credit per page**. Stored cash-overage fields are
+unused compatibility catalog data; never advertise them as actual charges or
+introduce postpaid billing. No trials, coupons, annual plans or new fees.
 
-Do not add marketing promises about this temporary configuration mode.
+The cryptographic browser account is a bearer capability. Require successful
+persistent browser storage/readback before checkout or management; disclose
+browser-only access and no automatic/cross-device recovery. Use fixed POST URLs
+for account, Checkout status and portal requests; capabilities/payment tokens
+belong in bodies, never analytics or access URLs. Legacy GET routes exist only
+for compatibility and must have operational log suppression.
 
-The anonymous cryptographic account ID is a bearer capability: possession permits
-using its allowance. The implementation supports one host with a durable SQLite
-database shared by its API workers. Multiple hosts require a transactional shared
-backend before enabling checkout; ephemeral or separate databases break durable
-idempotency. Never log account IDs or include them in analytics.
+Use a single durable SQLite database shared by API workers on one host, with
+**separate mode-bound database paths for test and live**. Multiple hosts need a
+shared transactional backend first. Additive stx_* tables retain owned Customer,
+opaque purchase references, subscription paid-through/terminal state, invoice
+cycles, payment reversals, FIFO credit lots, consumed history and reconciliation
+holds. Existing rows/balances survive migration; unowned legacy purchases cannot
+be attributed by account_id metadata. Never copy test balances into live billing.
+Back up billing metadata before rollout; never roll back by deleting it.
 
-Configure `STX_BILLING_DATABASE` on durable storage outside the public web root,
-`STX_BILLING_PROVIDER=stripe`, `STX_STRIPE_SECRET_KEY` with a test key,
-`STX_STRIPE_WEBHOOK_SECRET`, and `STX_CHECKOUT_ORIGIN`; see `.env.example`.
-Do not store key values in this repository. Checkout creation must reserve a
-persistent idempotency key before requesting Stripe. Signed paid webhooks grant
-entitlements atomically once per session. Browser redirects never grant Pro.
-Duplicate events, concurrent requests, ambiguous provider failures and process
-restarts must remain safe. Ambiguous requests beyond Stripe's idempotency-retention
-window fail closed for owner reconciliation. Monthly lifecycle events reset paid
-cycle allowance and revoke cancelled subscription access.
+Pin stripe-python 14.4.1 and request/webhook snapshot API
+`2026-02-25.clover`. Requests and signed objects must match configured livemode.
+Namespace new metadata `app=statement-to-excel` plus opaque purchase/binding
+references; never send browser account capabilities to Stripe metadata.
+Resolve events through owned durable references; valid foreign-app events are
+acknowledged without ledger/receipt mutation. Conflicting owned evidence fails
+closed. Use actual invoice.parent.subscription_details, InvoicePayments and
+subscription.items periods; do not restore removed legacy invoice fields.
+
+Customer and Checkout idempotency references commit before network calls. Reuse
+owned Customers and pending requests across concurrency/restarts. Ambiguous
+requests beyond 23 hours require owner reconciliation. Block duplicate initial
+subscriptions. Stripe-hosted portal derives its Customer solely from the account
+binding, validates app ownership/mode and uses only the canonical app return URL
+(localhost permitted only for test). Parent supplies a dedicated portal
+configuration per mode with payment-method updates and period-end cancellation,
+without plan-change controls.
+
+Paid Checkout/paid invoice evidence grants once; redirects and active subscription
+objects never grant. A matching newer paid cycle resets allowance once. Enforce
+paid-through on reads/debits, even without webhooks. Period-end cancellation keeps
+paid access until expiry; terminal cancellation/unpaid expiry removes recurring
+access while preserving separate packs. Stale events never revive terminal or
+reversed access. Full refunds revoke unused purchase credits/access atomically;
+consumed, partial or disputed reversals create a durable owner-reconciliation
+hold, preserving unrelated credits and consumed history without negative balances.
+Subscription reversals atomically queue verified immediate cancellation with no
+proration or new invoice, preventing future Stripe renewal. Provider I/O occurs
+after commit; durable leases/backoff and startup/30-second retries recover lost
+responses without another customer request. Replacement purchases stay blocked
+until cancellation is confirmed. An unused full-refund cancellation hold clears
+after confirmation; consumed/partial/disputed holds require owner reconciliation.
+`payments.resolve_hold` is a trusted owner-only database operation after manual
+reconciliation; it never restores a revoked purchase or subscription. No public
+admin/recovery API is introduced. Retain focused concurrent/restart, signature,
+mode, foreign-event, cycle, failure/recovery and reversal tests.
+
+## Tracking and consent
+
+Keep exactly one Umami destination `0ee0e19b-b29b-4c98-b3f6-a92a43b4ba5a`
+and the five existing funnel events/allowlisted conversion enums above. The
+blocking privacy bootstrap strips all query/hash/history state before any SDK;
+return reconciliation is drained into a private module cache first. Missing
+bootstrap prevents SDK loading. Umami automatic tracking/performance is disabled;
+manual pageviews/events pass a fresh sanitized payload boundary. Fixed page URL,
+title and empty referrer prevent statement/payment/account/search disclosure.
+
+Optional public build configuration: `VITE_GA_MEASUREMENT_ID` and
+`VITE_CF_WEB_ANALYTICS_TOKEN`; unset means no corresponding SDK. Parent supplies
+verified values, never guessed IDs. No Google request precedes explicit optional
+consent; choice is reversible, synchronized across tabs and localized in all five
+languages. Ads/Signals/User-ID features stay off. Parent must disable all GA
+Enhanced Measurement in the actual data stream before configuring its ID; source
+uses sanitized manual pageviews/funnel events only. Google can create anonymous
+browser/session identifiers; never confuse these with app capabilities/payment
+session tokens. Conversion/checkout cannot depend on tracking, consent or ads.
+
+Load Cloudflare's manual beacon once with spa:false; it may emit multiple
+lifecycle/vitals packets. Suppress it on sensitive original navigation URLs,
+visible query/hash/path or document referrers because SDK navigation timing can
+retain the original URL after replaceState. No DNS/proxy/TLS changes. Enable
+owner QA before navigation with localStorage stx_owner_qa='on', then reload;
+all providers are suppressed and QA evidence stays local. Never generate fake
+provider ingestion or call synthetic visits genuine acquisition. Inspect actual
+SDK serialized bodies with synthetic canaries, not callback counts alone.
+
+Preserve the exact document-memory/deletion promises in all locales while
+accurately disclosing retained billing/idempotency metadata, anonymous usage and
+optional Google analytics. Parent handles app-specific nginx/uvicorn URL log
+suppression; do not claim it is installed from this repository. See
+`docs/codex-live-billing-2026-10-16.md` for provider setup and verification limits.
 
 ## Working policy
 

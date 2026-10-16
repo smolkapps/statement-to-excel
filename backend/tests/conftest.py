@@ -43,6 +43,7 @@ def configured_provider(monkeypatch):
     provider = StripeBillingProvider(
         secret_key="sk_test_synthetic_not_a_credential",
         webhook_secret="whsec_synthetic_not_a_credential",
+        portal_configuration="bpc_synthetic",
     )
     monkeypatch.setattr(api, "PROVIDER", provider)
     return provider

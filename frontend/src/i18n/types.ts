@@ -74,6 +74,18 @@ export interface Translation {
   pricing_credit_explainer: string;
 
   checkout_error: string;
+  billing_test_mode: string;
+  billing_manage: string;
+  billing_recovery: string;
+  billing_storage_error: string;
+  billing_hold: string;
+  privacy_title: string;
+  privacy_billing: string;
+  privacy_analytics: string;
+  analytics_choice: string;
+  analytics_consent: string;
+  analytics_allow: string;
+  analytics_decline: string;
 
   // account
   account_title: string;

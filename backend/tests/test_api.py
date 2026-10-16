@@ -32,38 +32,19 @@ def client(monkeypatch, configured_provider):
 @pytest.fixture
 def paid_client(monkeypatch, tmp_path):
     """Real signed-webhook API with synthetic Stripe checkout transport."""
-    import stripe
+    from tests.test_billing_stripe import PaymentDouble
     monkeypatch.setattr(api_mod, "LEDGER", PersistentLedger(str(tmp_path / "billing.sqlite3")))
-    monkeypatch.setattr(api_mod, "PROVIDER", StripeBillingProvider(
-        "sk_test_synthetic_not_a_credential", "whsec_synthetic_not_a_credential"
-    ))
-    monkeypatch.setattr(stripe.checkout.Session, "create", lambda **kwargs: {
-        "id": "cs_test_" + uuid.uuid4().hex,
-        "url": "https://checkout.stripe.com/synthetic-test-only",
-    })
+    monkeypatch.setattr(api_mod, "PROVIDER", PaymentDouble())
     return TestClient(api_mod.app)
 
 
 def _purchase(client, account_id, sku):
+    from tests.test_billing_stripe import paid_event, sign
     checkout = client.post("/api/checkout", json={"account_id": account_id, "sku": sku},
                            headers={"Idempotency-Key": str(uuid.uuid4())})
     assert checkout.status_code == 200, checkout.text
-    pack = sku in CREDIT_PACKS
-    price = CREDIT_PACKS[sku].price_usd if pack else PLANS[sku].monthly_price_usd
-    event = {"id": "evt_test_" + uuid.uuid4().hex, "type": "checkout.session.completed",
-             "livemode": False, "data": {"object": {
-                 "id": checkout.json()["session_id"], "livemode": False,
-                 "payment_status": "paid", "currency": "usd", "amount_total": int(price * 100),
-                 "mode": "payment" if pack else "subscription",
-                 "subscription": None if pack else "sub_test_" + uuid.uuid4().hex,
-                 "metadata": {"account_id": account_id, "sku": sku},
-             }}}
-    payload = json.dumps(event).encode()
-    stamp = str(int(time.time()))
-    signature = hmac.new(b"whsec_synthetic_not_a_credential", stamp.encode() + b"." + payload,
-                         hashlib.sha256).hexdigest()
-    paid = client.post("/api/stripe/webhook", content=payload,
-                       headers={"Stripe-Signature": f"t={stamp},v1={signature}"})
+    payload = json.dumps(paid_event(checkout.json()["session_id"], event_id="evt_" + uuid.uuid4().hex)).encode()
+    paid = client.post("/api/stripe/webhook", content=payload, headers={"Stripe-Signature": sign(payload)})
     assert paid.status_code == 200, paid.text
     assert paid.json()["granted"]
     return client.get(f"/api/account/{account_id}").json()

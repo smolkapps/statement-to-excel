@@ -6,7 +6,7 @@ Endpoints
 ``GET  /api/pricing``                 plan + credit-pack catalog (shared w/ UI)
 ``GET  /api/account/{id}``            metering state for an account
 ``POST /api/account/{id}/quote``      cost of processing N pages (no charge)
-``POST /api/checkout``                idempotent Stripe test Checkout
+``POST /api/checkout``                idempotent owned Stripe Checkout
 ``GET  /api/checkout/{sid}``          account-bound payment status
 ``POST /api/stripe/webhook``          signed payment -> exactly-once entitlement
 ``POST /api/convert``                 multipart PDF upload -> metered conversion
@@ -15,7 +15,7 @@ Conversion and output generation run in a deadline-limited subprocess using
 memory-only pipes. Usage is charged only
 after successful output generation. Optional Idempotency-Key prevents repeat
 usage debits for 24 hours after creation; replay does not extend that window.
-Billing stores metadata only. Until Stripe test Checkout and signed webhooks are
+Billing stores metadata only. Until mode-matched Stripe Checkout and signed webhooks are
 configured, conversions are unmetered and write no account or conversion records.
 """
 
@@ -26,28 +26,30 @@ import hashlib
 import json
 import os
 import threading
+from contextlib import asynccontextmanager
 from typing import Annotated, Optional
 
 from anyio import CancelScope
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 from starlette.formparsers import MultiPartParser
 
 from . import __version__
 from .billing import (
     BillingError, InsufficientCredits, PersistentLedger, PRICING, StripeBillingProvider,
-    apply_webhook, checkout_status, create_checkout, get_provider,
+    apply_webhook, checkout_status, create_checkout, create_portal, get_provider,
 )
 from .conversion import MAX_UPLOAD_BYTES, MAX_STATEMENT_PAGES, ConversionArtifact, ConversionRejected
 from .conversion_timeout import MAX_CONCURRENT_CONVERSIONS, ConversionBusy, run_conversion
+from .payments import drain_actions
 
 # SQLite persists billing and metering metadata only. Uploads and converted
 # transaction rows must never enter the ledger or provider.
-LEDGER = PersistentLedger(os.getenv("STX_BILLING_DATABASE", "var/billing.sqlite3"))
 PROVIDER = get_provider()
+LEDGER = PersistentLedger(os.getenv("STX_BILLING_DATABASE", "var/billing.sqlite3"), mode=PROVIDER.mode)
 _admission = threading.BoundedSemaphore(MAX_CONCURRENT_CONVERSIONS)
 
 # Starlette's file parser uses this supported class setting when it constructs
@@ -55,7 +57,30 @@ _admission = threading.BoundedSemaphore(MAX_CONCURRENT_CONVERSIONS)
 # uploads can still spill and are closed/deleted by the cleanup below.
 MultiPartParser.spool_max_size = MAX_UPLOAD_BYTES + 1024 * 1024
 
-app = FastAPI(title="statement-to-excel", version=__version__)
+@asynccontextmanager
+async def lifespan(app):
+    async def retry_cancellations():
+        while True:
+            try:
+                if checkout_available() and isinstance(LEDGER, PersistentLedger):
+                    await run_in_threadpool(drain_actions, LEDGER, PROVIDER)
+            except Exception:
+                # Durable pending actions survive restart; no provider details
+                # enter logs. Retry independent of another customer request.
+                pass
+            await asyncio.sleep(30)
+    task = asyncio.create_task(retry_cancellations())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="statement-to-excel", version=__version__, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -80,12 +105,22 @@ class QuoteRequest(BaseModel):
 
 
 class CheckoutRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     account_id: str
     sku: str
 
 
+class AccountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    account_id: str
+
+
+class CheckoutStatusRequest(AccountRequest):
+    session_id: str
+
+
 def checkout_available() -> bool:
-    """Only a configured Stripe test provider enables checkout and metering."""
+    """Only a fully configured, mode-matched provider enables metering."""
     return isinstance(PROVIDER, StripeBillingProvider) and PROVIDER.checkout_available
 
 
@@ -99,6 +134,8 @@ def _account_view(account_id: str) -> dict:
         "pages_used_this_cycle": acct.pages_used_this_cycle,
         "included_remaining": acct.included_remaining(),
         "pro": acct.pro,
+        "billing_hold": acct.billing_hold,
+        "management_available": bool(getattr(PROVIDER, 'portal_configuration', '')) and bool(getattr(LEDGER, 'has_customer', lambda _: False)(account_id)),
     }
 
 
@@ -106,14 +143,34 @@ def _account_view(account_id: str) -> dict:
 # Routes
 # --------------------------------------------------------------------------- #
 @app.get("/api/health")
-def health() -> dict:
+async def health() -> dict:
     return {"status": "ok", "version": __version__, "billing": PROVIDER.name,
-            "checkout_available": checkout_available()}
+            "checkout_available": checkout_available(), "billing_mode": getattr(PROVIDER, 'mode', 'test')}
 
 
 @app.get("/api/pricing")
 def pricing() -> dict:
-    return {**PRICING, "checkout_available": checkout_available()}
+    return {**PRICING, "checkout_available": checkout_available(), "billing_mode": getattr(PROVIDER, 'mode', 'test')}
+
+
+@app.post("/api/account")
+def account_private(body: AccountRequest) -> dict:
+    return _account_view(body.account_id)
+
+
+@app.post("/api/checkout/status")
+def checkout_status_private(body: CheckoutStatusRequest) -> dict:
+    return get_checkout_status(body.session_id, body.account_id)
+
+
+@app.post("/api/billing/portal")
+def billing_portal(body: AccountRequest) -> dict:
+    if not checkout_available():
+        raise HTTPException(status_code=503, detail="Checkout is unavailable.")
+    try:
+        return create_portal(LEDGER, PROVIDER, body.account_id)
+    except BillingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @app.get("/api/account/{account_id}")
@@ -134,7 +191,7 @@ def quote(account_id: str, body: QuoteRequest) -> dict:
 @app.post("/api/checkout")
 def checkout(body: CheckoutRequest, idempotency_key: str = Header("")) -> dict:
     if not checkout_available():
-        raise HTTPException(status_code=503, detail="Checkout is unavailable until Stripe test credentials and webhook are configured.")
+        raise HTTPException(status_code=503, detail="Checkout is unavailable until matching Stripe credentials and webhook are configured.")
     try:
         return create_checkout(LEDGER, PROVIDER, body.account_id, body.sku, idempotency_key)
     except BillingError as exc:
@@ -144,10 +201,10 @@ def checkout(body: CheckoutRequest, idempotency_key: str = Header("")) -> dict:
 @app.post("/api/stripe/webhook")
 async def stripe_webhook(request: Request, stripe_signature: str = Header("")) -> dict:
     if not checkout_available():
-        raise HTTPException(status_code=503, detail="Stripe test checkout and webhook must be configured before payments can be fulfilled.")
+        raise HTTPException(status_code=503, detail="Stripe checkout and webhook must be configured before payments can be fulfilled.")
     try:
         event = PROVIDER.verify_event(await request.body(), stripe_signature)
-        return apply_webhook(LEDGER, event)
+        return await run_in_threadpool(apply_webhook, LEDGER, event, PROVIDER)
     except BillingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
@@ -184,6 +241,10 @@ def _convert_response(
             raise HTTPException(status_code=409, detail=str(exc))
         except InsufficientCredits as exc:
             acct = ledger.get_or_create(account_id)
+            if acct.billing_hold:
+                return JSONResponse(status_code=409, content={
+                    "error": "billing_hold", "detail": "Payment reconciliation is needed. Contact the site owner.",
+                })
             return JSONResponse(status_code=402, content={
                 "error": "insufficient_credits", "detail": str(exc), "quote": acct.quote(pages),
             })

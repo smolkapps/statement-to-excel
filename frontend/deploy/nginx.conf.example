@@ -2,7 +2,7 @@
 # Replace the document root/upstream with the operator's actual configuration.
 # Run the backend from backend/:
 #   uvicorn statement_to_excel.api:app --host 127.0.0.1 --port 8000
-# Set durable STX_BILLING_DATABASE and test-mode Stripe settings in that service.
+# Set durable mode-bound STX_BILLING_DATABASE and matching Stripe settings in that service.
 server {
     listen 80;
     server_name statement-to-excel.apps.smolkin.org;

@@ -14,6 +14,7 @@ export function Pricing({ onBuyPack, onChoosePlan, busy = false }: Props) {
       <h2>{t.pricing_title}</h2>
       <p className="pricing-sub">{t.pricing_subtitle}</p>
 
+      <p className="pricing-explainer">{t.billing_recovery}</p>
       <h3 className="pricing-section-title">{t.pricing_plans_title}</h3>
       <div className="plan-grid">
         {PRICING.plans.map((plan) => (
@@ -32,7 +33,7 @@ export function Pricing({ onBuyPack, onChoosePlan, busy = false }: Props) {
               </li>
               {Number(plan.overage_per_page_usd) > 0 && (
                 <li>
-                  {formatUsd(plan.overage_per_page_usd)} {t.pricing_overage}
+                  {t.pricing_overage}
                 </li>
               )}
             </ul>
