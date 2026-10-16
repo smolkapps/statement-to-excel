@@ -4,7 +4,7 @@ on:
   pull_request:
 jobs:
   python-backend:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(format(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '"ubuntu-latest"' || vars.STUDIO_CI_UBUNTU_LATEST || '["self-hosted","Linux","ARM64","studio-linux","studio-run-{0}"]', github.run_id)) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,7 +27,7 @@ jobs:
             work/accuracy/accuracy-family-report.json
             work/accuracy/accuracy-report.md
   node-frontend:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(format(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '"ubuntu-latest"' || vars.STUDIO_CI_UBUNTU_LATEST || '["self-hosted","Linux","ARM64","studio-linux","studio-run-{0}"]', github.run_id)) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,7 +43,7 @@ jobs:
         working-directory: frontend
         run: npm test
   browser-end-to-end:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(format(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '"ubuntu-latest"' || vars.STUDIO_CI_UBUNTU_LATEST || '["self-hosted","Linux","ARM64","studio-linux","studio-run-{0}"]', github.run_id)) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,7 +62,15 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          if [[ "$RUNNER_NAME" == studio-linux-* ]]; then
+            # Pinned Playwright1.58.2 uses its Ubuntu24 ARM64 compatibility target.
+            # Matching OS dependencies are provisioned by the VM administrator.
+            export PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-arm64
+            echo "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$PLAYWRIGHT_HOST_PLATFORM_OVERRIDE" >> "$GITHUB_ENV"
+            npx playwright install chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
       - name: Build frontend
         working-directory: frontend
         run: npm run build
