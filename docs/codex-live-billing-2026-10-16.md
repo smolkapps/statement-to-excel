@@ -3,7 +3,7 @@
 Repository: smolkapps/statement-to-excel. Branch:
 `codex/live-billing-analytics-20261016`. Refreshed base:
 `575d0e4c15f24cf6ce87e6496c7c3be19ead986a` (merged PR #7).
-Verified implementation head: a742293d6229621b326170ebe399b5081e681c61.
+Verified implementation head: 3803d2a87d355ef9b7acd0d4ffcd436c0ba9fa08.
 This report is a documentation-only follow-up to that implementation commit;
 the PR records its current delivery head. PRs #5/#6/#7 and their branches/reports
 are preserved. No other open PR owned this work at the initial or final remote
@@ -141,12 +141,12 @@ is committed.
 | Check | Current result |
 | --- | --- |
 | Full backend | **449 passed**, 0 failures/skips (13 SDK/Starlette deprecation warnings) |
-| Frontend | **195 passed**, 12 files, 0 failures/skips |
+| Frontend | **196 passed**, 12 files, 0 failures/skips |
 | Production build | TypeScript, SEO contract and Vite build passed |
 | HTTP routing | **2 passed** (dev and production preview) |
 | Synthetic corpus | **22 statements, 14 families, 372/372 exact rows** |
 | Silent errors / false alarms | **0 / 0** |
-| Browser e2e | **21 passed**, 0 failures/skips, one agent-owned Camoufox worker |
+| Browser e2e | **21 passed** in agent-owned Camoufox; **21 passed** in agent-owned Chromium; 5 focused Camoufox follow-up cases passed; 0 current failures/skips |
 | Workbook calculation | 2 downloaded deposit/card workbooks independently calculated |
 | Source checks | git diff --check; exact device paragraph once; icons/SEO unchanged |
 
@@ -163,7 +163,8 @@ The actual captured Umami and Cloudflare JavaScript SDKs execute in an
 agent-owned Camoufox browser; all ingestion is intercepted. Umami fetch uses a
 local HTTP transport shim to observe its real serialized body; an unmodified
 external SDK fetch did not dispatch in this browser. Cloudflare's actual network
-bodies include lifecycle flush after conversion/navigation. Google uses an
+bodies include an explicit visibility-lifecycle flush after conversion,
+followed by actual navigation and return-URL exclusion checks. Google uses an
 explicitly mocked command-to-network serializer, not a genuine Google SDK/property.
 Synthetic filename/row/account/statement amount/date/payment-query canaries are
 absent from captured SDK/request bodies, URLs, headers and referrers. Consent,
@@ -202,6 +203,21 @@ The corpus includes December/January, multiline/repeated headers, no activity,
 overdraft, million-unit values and a 40-page statement; page-limit tests reject
 101 pages before extraction. Real-bank accuracy remains unverified. Equation
 balance does not certify every date/description or detect offsetting row errors.
+
+### CI follow-through
+
+The first GitHub Chromium run passed 19 cases and exposed two SDK test failures:
+it did not deliver the old page's visibility beacon before navigation destroyed
+that page/route. The test now explicitly exercises the actual SDK's visibility
+handler while its HTTP transport is observable, retains the serialized canary
+assertions, then separately navigates and checks sensitive-return exclusion.
+No payload assertion was removed. The stronger blocked-bootstrap test also
+found a real StrictMode fallback-return loss; a short-lived module-private cache
+preserves initialization without keeping the token in a global or enabling SDKs.
+Frontend now passes 196 tests, affected Camoufox cases pass 5/5, and the full
+agent-owned Chromium suite passes 21/21. Backend and frontend GitHub jobs passed
+on the initial head; updated remote CI is tracked on the PR rather than assumed
+from fixtures. No provider ingestion/payment claim follows from these checks.
 
 ### Per-family synthetic corpus
 
