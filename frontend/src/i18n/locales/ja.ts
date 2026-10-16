@@ -38,6 +38,8 @@ export const ja: Translation = {
   convert_download: "ダウンロード",
   convert_error_generic:
     "そのファイルから取引を読み取れませんでした。画像のみ、または特殊なレイアウトの可能性があります。",
+  convert_error_timeout:
+    "変換に時間がかかりすぎました。より小さい明細で再試行するか、ページ数の少ないファイルに分割してください。",
   convert_error_insufficient:
     "含まれるページ数とクレジットを使い切りました。続けるにはクレジットパックをご購入ください。",
   convert_results_title: "プレビュー",

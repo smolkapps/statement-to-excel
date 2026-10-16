@@ -13,7 +13,7 @@ vi.mock("../lib/api", async () => {
 
 // Import after vi.mock so the component picks up the mocked module.
 import { Converter } from "./Converter";
-import { ApiError, type ConvertOutcome, type Reconciliation } from "../lib/api";
+import { ApiError, type ConvertOutcome, type OutputFormat, type Reconciliation } from "../lib/api";
 import { formatStatementMoney } from "../lib/reconciliation";
 
 function renderConverter(props: Parameters<typeof Converter>[0], locale: LocaleCode = "en") {
@@ -187,6 +187,60 @@ describe("Converter", () => {
     selectFileAndConvert();
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(LOCALES.en.convert_error_generic));
     expect(screen.getByRole("alert")).not.toHaveTextContent(detail);
+  });
+
+  it.each(LOCALE_ORDER)("shows a recoverable timeout and resets controls in %s", async (locale) => {
+    let fail!: (error: ApiError) => void;
+    convertStatement.mockImplementation(() => new Promise<ConvertOutcome>((_, reject) => { fail = reject; }));
+    const onCharged = vi.fn();
+    renderConverter({ accountId: "web_test", onCharged }, locale);
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [new File(["synthetic"], "statement.pdf")] } });
+    fireEvent.click(screen.getByRole("button", { name: LOCALES[locale].convert_button }));
+    expect(screen.getByRole("button", { name: LOCALES[locale].convert_processing })).toBeDisabled();
+    expect(input).toBeDisabled();
+
+    const detail = "Internal timeout details must not appear in the UI.";
+    await act(async () => fail(new ApiError("parse", detail, 504)));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(LOCALES[locale].convert_error_timeout);
+    expect(screen.getByRole("alert")).not.toHaveTextContent(detail);
+    expect(screen.getByRole("button", { name: LOCALES[locale].convert_button })).toBeEnabled();
+    expect(input).toBeEnabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: LOCALES[locale].convert_download })).not.toBeInTheDocument();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(onCharged).not.toHaveBeenCalled();
+  });
+
+  it.each<OutputFormat>(["xlsx", "csv", "json"])("clears stale results on a %s timeout and allows the same file to retry", async (fmt) => {
+    convertStatement.mockResolvedValueOnce(outcome(1))
+      .mockRejectedValueOnce(new ApiError("parse", "Conversion deadline reached.", 504))
+      .mockResolvedValueOnce(outcome(1));
+    const onCharged = vi.fn();
+    renderConverter({ accountId: "web_test", onCharged });
+    fireEvent.change(screen.getByLabelText("Output format"), { target: { value: fmt } });
+    const file = selectFileAndConvert();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument());
+    expect(onCharged).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Convert" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(LOCALES.en.convert_error_timeout));
+    expect(screen.queryByText("ACH PAYROLL DEPOSIT")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    expect(onCharged).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Convert" }));
+    await waitFor(() => expect(screen.getByText("ACH PAYROLL DEPOSIT")).toBeInTheDocument());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(convertStatement).toHaveBeenCalledTimes(3);
+    for (const call of convertStatement.mock.calls) {
+      expect(call).toEqual([file, { accountId: "web_test", fmt, currency: "USD" }]);
+    }
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(2);
+    expect(onCharged).toHaveBeenCalledTimes(2);
   });
 
   it("does not charge when the account has insufficient credits", async () => {

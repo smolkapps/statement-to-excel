@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import statement_to_excel.api as api
+from statement_to_excel.conversion_timeout import ConversionWorkerError
 from statement_to_excel.billing import Ledger
 
 
@@ -28,11 +29,11 @@ def test_duplicate_conversion_debits_once(client, fixtures_dir, fmt):
 
 
 def test_writer_failure_never_debits(client, fixtures_dir, monkeypatch):
-    def fail(*args):
-        raise RuntimeError("synthetic writer failure")
-    monkeypatch.setattr(api, "to_xlsx_bytes", fail)
-    with pytest.raises(RuntimeError, match="synthetic writer"):
-        client.post("/api/convert", files={"file": ("synthetic.pdf", (fixtures_dir / "acmebank.pdf").read_bytes(), "application/pdf")}, data={"account_id": "writer", "fmt": "xlsx"}, headers={"Idempotency-Key": "conversion-writer-123456"})
+    async def fail(*args):
+        raise ConversionWorkerError()
+    monkeypatch.setattr(api, "run_conversion", fail)
+    response = client.post("/api/convert", files={"file": ("synthetic.pdf", (fixtures_dir / "acmebank.pdf").read_bytes(), "application/pdf")}, data={"account_id": "writer", "fmt": "xlsx"}, headers={"Idempotency-Key": "conversion-writer-123456"})
+    assert response.status_code == 500
     assert client.get("/api/account/writer").json()["pages_used_this_cycle"] == 0
 
 

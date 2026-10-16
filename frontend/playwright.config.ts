@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import { defineConfig } from "@playwright/test";
 
-const executablePath = process.env.STX_CHROMIUM_PATH ||
+// The default CI browser stays Chromium. Owners can explicitly run the same
+// journeys in an isolated Camoufox executable without a personal browser profile.
+const camoufoxPath = process.env.STX_CAMOUFOX_PATH;
+const executablePath = camoufoxPath || process.env.STX_CHROMIUM_PATH ||
   (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
 
 export default defineConfig({
@@ -14,7 +17,7 @@ export default defineConfig({
   outputDir: "../work/playwright-results",
   use: {
     baseURL: "http://127.0.0.1:4173",
-    browserName: "chromium",
+    browserName: camoufoxPath ? "firefox" : "chromium",
     headless: true,
     locale: "en-US",
     launchOptions: { executablePath },
@@ -28,7 +31,7 @@ export default defineConfig({
     },
     {
       name: "unconfigured-billing",
-      testMatch: "availability.spec.ts",
+      testMatch: ["availability.spec.ts", "viewport.spec.ts"],
       use: { baseURL: "http://127.0.0.1:4173" },
     },
   ],

@@ -38,6 +38,8 @@ export const it: Translation = {
   convert_download: "Scarica",
   convert_error_generic:
     "Non siamo riusciti a leggere le transazioni da quel file. Potrebbe essere solo un'immagine o avere un layout insolito.",
+  convert_error_timeout:
+    "La conversione ha impiegato troppo tempo. Riprova con un estratto conto più piccolo o suddividilo in file con meno pagine.",
   convert_error_insufficient:
     "Hai esaurito le pagine incluse e i crediti. Acquista un pacchetto di crediti per continuare.",
   convert_results_title: "Anteprima",

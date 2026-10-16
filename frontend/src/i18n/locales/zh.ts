@@ -38,6 +38,8 @@ export const zh: Translation = {
   convert_download: "下载",
   convert_error_generic:
     "无法从该文件读取交易。它可能仅为图片，或版式异常。",
+  convert_error_timeout:
+    "转换耗时过长。请使用较小的对账单重试，或将其拆分为页数更少的文件。",
   convert_error_insufficient:
     "您的免费页数和点数已用完。请购买点数包以继续。",
   convert_results_title: "预览",

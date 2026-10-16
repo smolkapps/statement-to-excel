@@ -204,8 +204,28 @@ before the SPA fallback. The repository contains an nginx example, not the
 operator's actual production configuration.
 
 Both billing modes reject PDFs over **100 pages** with HTTP 413 before extracting
-transactions. Counting, parsing and output serialization run in a worker thread
-so a long conversion does not block the API's health endpoint.
+transactions. The API runs page counting, parsing, reconciliation, output writing,
+preview encoding and JSON serialization in a disposable subprocess with a
+**30-second wall deadline**, covering startup, memory-pipe transfer and exit.
+Timeout returns HTTP 504 with retry/split instructions; it kills and reaps the
+worker before freeing capacity. Cancellation receives the same cleanup.
+
+Two conversions may be admitted per ASGI worker, through parent billing and
+upload cleanup; additional requests get a recoverable HTTP 503 rather than
+accumulating a conversion or completed-output queue. A separate two-process
+worker cap also applies. Each Linux
+worker has a 512 MiB address-space limit, a CPU-time backstop and core dumps
+disabled (including Linux piped core collectors). Encoded output is capped at 64 MiB before charging. Workers never import
+billing or write PDFs, worksheet XML or outputs to disk. Billing stays in the
+parent and follows successful completed output only, preserving same-key retries.
+Health requests use the event loop while workers run. The optional
+`STX_CONVERSION_TIMEOUT_SECONDS` accepts finite values greater than zero and at
+most 120; no production setting needs changing for the default. A reverse proxy
+must allow the deadline plus cleanup/transfer time (the repository example's
+120-second read timeout covers the default). Host memory planning must account
+for ASGI worker count multiplied by two child address-space budgets, plus parent
+uploads/responses. CLI and direct library calls remain local synchronous APIs;
+the hosted request deadline does not change their caller-controlled execution.
 
 ### Privacy
 
