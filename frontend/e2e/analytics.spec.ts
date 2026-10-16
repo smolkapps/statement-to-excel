@@ -17,6 +17,15 @@ async function providers(page: Page) {
     const request = route.request();
     const url = new URL(request.url());
     if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    if (url.pathname === '/__sdk/visibility-flush.js') {
+      // A headless Chromium navigation need not expose visibility=hidden
+      // before the old document/route is destroyed. Exercise the actual SDK's
+      // visibility handler while its transport is still observable.
+      return route.fulfill({ contentType: 'application/javascript', body: `
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+        document.dispatchEvent(new Event('visibilitychange'));
+      ` });
+    }
     if (url.pathname === '/privacy-bootstrap.js') {
       const bootstrap = readFileSync(resolve('public/privacy-bootstrap.js'), 'utf8');
       return route.fulfill({ contentType: 'application/javascript', body: bootstrap + `
@@ -98,13 +107,17 @@ for (const size of [{ width: 1365, height: 900 }, { width: 390, height: 844 }]) 
     await expect(page.locator('.results')).toContainText(canary);
     await expect.poll(() => captured.bodies.filter(p => p.provider === 'umami' && p.body.includes('convert-success')).length).toBe(1);
     await page.getByRole('button', { name: 'Decline Google Analytics', exact: true }).click();
-    // SDK flush on pagehide/navigation exercises CF timing/referrer serialization.
+    // Explicit lifecycle simulation exercises CF's real timing/vitals payload;
+    // actual navigation below independently checks return URL exclusion.
     const cfBeforeReturn = captured.bodies.filter(p => p.provider === 'cf').length;
+    await page.locator('head').evaluate(head => {
+      const script = document.createElement('script'); script.src = '/__sdk/visibility-flush.js'; head.appendChild(script);
+    });
+    await expect.poll(() => captured.bodies.filter(p => p.provider === 'cf').length).toBeGreaterThan(cfBeforeReturn);
     await page.goto('/?checkout=success&session_id=cs_test_' + canary + '#' + canary);
     await expect.poll(() => captured.polls.length).toBeGreaterThan(0);
     expect(captured.polls[0]).toBe('cs_test_' + canary);
     expect(new URL(page.url()).search).toBe(''); expect(new URL(page.url()).hash).toBe('');
-    await expect.poll(() => captured.bodies.filter(p => p.provider === 'cf').length).toBeGreaterThan(cfBeforeReturn);
     expect(captured.loads.filter(p => p === 'cf')).toHaveLength(1); // return page excluded
     const serialized = JSON.stringify(captured.bodies);
     expect(serialized).not.toContain(canary); expect(serialized).not.toContain('9876543.21'); expect(serialized).not.toContain('2026-01-01');
@@ -138,6 +151,8 @@ test('missing bootstrap suppresses SDKs while conversion and private return reco
   await page.route('**/privacy-bootstrap.js', route => route.abort());
   await page.goto('/?checkout=success&session_id=cs_test_' + canary);
   await expect(page.locator('.account-chip')).toBeVisible();
+  await expect.poll(() => captured.polls.length).toBeGreaterThan(0);
+  expect(captured.polls[0]).toBe('cs_test_' + canary);
   await page.getByRole('button', { name: 'Allow Google Analytics', exact: true }).click();
   await page.locator('input[type=file]').setInputFiles(resolve('../backend/tests/fixtures/acmebank.pdf'));
   await page.getByLabel('Output format').selectOption('json');

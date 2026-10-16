@@ -11,13 +11,20 @@ const checkoutReturn = window.stxPrivacy?.takeReturn();
 export function analyticsReady(): boolean {
   return !!checkoutReturn && location.pathname === '/' && !location.search && !location.hash;
 }
+let fallbackReturn: CheckoutReturn | undefined;
 
 /** Fallback for isolated component tests; production runs the blocking bootstrap. */
 export function captureCheckoutReturn(): CheckoutReturn {
   if (checkoutReturn) return checkoutReturn;
+  if (fallbackReturn) return fallbackReturn;
   const params = new URLSearchParams(location.search);
-  const result = { returning: params.get("checkout") === "success", sessionId: params.get("session_id") };
+  const session = params.get("session_id");
+  const result = { returning: params.get("checkout") === "success", sessionId: session && /^cs_(test_|live_)?[A-Za-z0-9_]{1,240}$/.test(session) ? session : null };
   history.replaceState(null, "", "/");
+  // StrictMode repeats initialization synchronously. Preserve the private
+  // capture for this render, then leave lifetime ownership in App state.
+  fallbackReturn = result;
+  queueMicrotask(() => { fallbackReturn = undefined; });
   return result;
 }
 

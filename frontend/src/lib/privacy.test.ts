@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { persistentAccount } from './privacy';
+import { captureCheckoutReturn, persistentAccount } from './privacy';
 
 function bootstrap(url: string, referrer = '', qa = false, originalURL = url) {
   const target: Record<string, unknown> = {};
@@ -15,6 +15,16 @@ function bootstrap(url: string, referrer = '', qa = false, originalURL = url) {
 }
 
 describe('before-tracker URL privacy', () => {
+  it('preserves a fallback return across StrictMode initialization without globally retaining its token', async () => {
+    history.replaceState(null, '', '/?checkout=success&session_id=cs_test_canary');
+    const first = captureCheckoutReturn();
+    expect(captureCheckoutReturn()).toEqual(first);
+    expect(first.sessionId).toBe('cs_test_canary');
+    expect(location.search).toBe('');
+    await Promise.resolve();
+    expect(captureCheckoutReturn()).toEqual({ returning: false, sessionId: null });
+    await Promise.resolve();
+  });
   it('captures return privately and removes query, hash, history state before any tracker', () => {
     const { target, history } = bootstrap('https://statement-to-excel.apps.smolkin.org/?checkout=success&session_id=cs_test_canaryPayment&account=canaryAccount#canaryRows');
     expect(history.replaceState).toHaveBeenCalledTimes(1);
