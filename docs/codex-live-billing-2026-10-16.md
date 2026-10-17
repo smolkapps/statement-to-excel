@@ -200,8 +200,8 @@ is committed.
 
 ## Verification
 
-Final local verification finished October 17 UTC (October 16 in the owner
-timezone); the requested October 16 report path is retained.
+Final local verification finished October 17 UTC; the requested October 16
+report path is retained.
 
 | Check | Current result |
 | --- | --- |
@@ -304,8 +304,20 @@ then rebuilding without forwarding put both values into its production bundle.
 The real repository's tracked file remains empty. Two fresh-clone builds passed;
 no configured bundle was published and no provider request was made by this check.
 
-Final local checks precede one consolidated branch push. Final-head Linux CI
-status is recorded on PR8, not inferred from fixtures. Parent owns independent
+The consolidated product/report push was followed by a fixture-only teardown
+repair discovered while retaining the final raw SDK receipt report: closing the
+synthetic HTTPS page can cancel an in-flight loopback proxy. Only page-closed
+cancellation is ignored; live failures still throw and every provider route stays
+installed through teardown, so no synthetic ingestion escapes. Product code,
+financial tests and build behavior are unchanged. Both browser suites were
+replayed after the repair.
+
+At delivery the three required final-head Linux jobs awaited an assigned
+parent-owned Studio Linux ARM64 runner; the parent's preceding 8b9 runs were also
+queued. This is an external CI verification limit, not a final-head green claim.
+The superseded task-owned queued run was canceled to avoid wasted CI minutes;
+parent-owned runs/settings were preserved. Latest status is on PR8/checks and
+not inferred from fixtures. Parent owns independent
 review and genuine provider verification.
 
 ### Per-family synthetic corpus

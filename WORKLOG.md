@@ -31,3 +31,8 @@ CI push to main without changing parent runner ownership. No provider operation,
 real statement, secret, purchase/refund, deployment or main push occurred.
 
 Evidence and complete file/family tables: docs/codex-live-billing-2026-10-16.md.
+
+Follow-up: retaining raw SDK receipts exposed a synthetic-HTTPS proxy teardown
+race after page closure. Guard only closed-page cancellation, keep all provider
+routes installed, and rerun browser suites. Product code is unchanged. Final CI
+awaits parent-owned Studio runner assignment; no runner setting was changed.

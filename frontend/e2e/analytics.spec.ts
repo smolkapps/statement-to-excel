@@ -100,8 +100,15 @@ async function providers(page: Page, appOrigin = 'http://127.0.0.1:4175') {
       return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: '{}' });
     }
     if (url.origin === appOrigin && url.hostname !== '127.0.0.1') {
-      const response = await route.fetch({ url: 'http://127.0.0.1:4175' + url.pathname + url.search, headers: { ...request.headers(), host: '127.0.0.1:4175' } });
-      return route.fulfill({ response });
+      try {
+        const response = await route.fetch({ url: 'http://127.0.0.1:4175' + url.pathname + url.search, headers: { ...request.headers(), host: '127.0.0.1:4175' } });
+        if (!page.isClosed()) await route.fulfill({ response });
+      } catch (error) {
+        // Keep all routes installed through teardown so no provider traffic can
+        // escape. Page closure legitimately cancels a pending local HTTP proxy.
+        if (!page.isClosed()) throw error;
+      }
+      return;
     }
     if (url.hostname !== '127.0.0.1') {
       bodies.push({ provider: 'google', started: request.timing().startTime, body: request.postData() ?? '', url: request.url(), headers: JSON.stringify(request.headers()), referrer: request.headers().referer ?? '' });
