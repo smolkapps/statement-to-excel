@@ -148,16 +148,32 @@ def refresh_account_access(db, account_id):
     records = db.execute("SELECT * FROM stx_subscriptions WHERE account_id=?", (account_id,)).fetchall()
     if not records:
         return  # Preserve existing manually administered/legacy accounts.
-    valid = [r for r in records if not r['terminal'] and not r['blocked'] and r['paid_through'] > time.time()]
+    valid = [r for r in records if r['paid_through'] > time.time() and (
+        not r['terminal'] and not r['blocked'] or _retained_cycle(db, r))]
     if valid:
         return
     paid_pack = db.execute("SELECT 1 FROM stx_credit_lots WHERE account_id=? AND revoked=0", (account_id,)).fetchone()
     db.execute("UPDATE accounts SET plan_id='free',pages_used=MAX(pages_used,3),pro=? WHERE id=?", (bool(paid_pack), account_id))
 
 
+def _retained_cycle(db, subscription):
+    """A renewal stop cannot erase a different, already-paid current invoice.
+
+    The pinned invoice is set only by an older-cycle reversal. It never grants a
+    new cycle or resets use, and its own reversal/expiry ends retained service.
+    """
+    return subscription['retained_invoice_id'] and db.execute(
+        "SELECT 1 FROM stx_cycles c JOIN stx_payments p ON p.invoice_id=c.invoice_id "
+        "WHERE c.invoice_id=? AND c.subscription_id=? AND c.period_start=? "
+        "AND c.period_end=? AND c.period_end>? AND c.granted=1 AND c.reversed=0 "
+        "AND p.reversed=0 AND p.disputed=0",
+        (subscription['retained_invoice_id'], subscription['subscription_id'],
+         subscription['cycle_start'], subscription['paid_through'], time.time())).fetchone()
+
+
 def record_spend(db, account_id, included, credits):
     if included:
-        row = db.execute("SELECT c.invoice_id FROM stx_cycles c JOIN stx_subscriptions s USING(subscription_id) WHERE s.account_id=? AND s.terminal=0 AND s.blocked=0 AND c.reversed=0 AND c.period_start=s.cycle_start AND c.period_end>? ORDER BY c.period_start DESC LIMIT 1", (account_id, time.time())).fetchone()
+        row = db.execute("SELECT c.invoice_id FROM stx_cycles c JOIN stx_subscriptions s USING(subscription_id) WHERE s.account_id=? AND ((s.terminal=0 AND s.blocked=0) OR s.retained_invoice_id=c.invoice_id) AND c.granted=1 AND c.reversed=0 AND c.period_start=s.cycle_start AND c.period_end>? ORDER BY c.period_start DESC LIMIT 1", (account_id, time.time())).fetchone()
         if row:
             db.execute("UPDATE stx_cycles SET used_pages=used_pages+? WHERE invoice_id=?", (included, row['invoice_id']))
     # FIFO purchase lots retain consumed history for safe reversals. Legacy or
@@ -181,6 +197,39 @@ def _request(db, key, account_id, sku):
     return row
 
 
+def _release_checkout_choice(db, provider, row):
+    """Expire only the recorded owned, unpaid open Session; never a cancel URL.
+
+    The SQLite reservation remains locked through provider confirmation. Lost
+    responses leave the original row/key intact; a retry retrieves that Session.
+    Completed/processing or ambiguous creates must await signed reconciliation.
+    """
+    require(row['session_id'], "Pending checkout needs reconciliation. Retry the original choice.", 409)
+    binding = db.execute("SELECT * FROM stx_customers WHERE account_id=? AND mode=?", (row['account_id'], provider.mode)).fetchone()
+    require(binding and binding['customer_id'] == row['customer_id'])
+    customer = provider.call('customers', 'retrieve', row['customer_id'])
+    provider.validate_object(customer)
+    require(customer.get('id') == row['customer_id'] and not customer.get('deleted') and customer.get('metadata') == {'app': APP, 'binding_ref': binding['binding_ref']})
+
+    def validate(session):
+        provider.validate_object(session)
+        require(session.get('id') == row['session_id'] and ident(session.get('customer')) == row['customer_id'] and session.get('metadata') == metadata(row['purchase_ref']))
+        require(session.get('mode') == ('payment' if row['sku'] in CREDIT_PACKS else 'subscription') and session.get('amount_total') == amount(row['sku']) and session.get('currency') == 'usd')
+        require(session.get('payment_status') == 'unpaid', "Previous checkout payment is awaiting signed confirmation.", 409)
+        # Once payment/subscription creation has started, expiry alone cannot
+        # prove that an async payment or subscription won't complete later.
+        require(not session.get('payment_intent') and not session.get('subscription'), "Previous checkout payment is still being reconciled.", 409)
+
+    session = provider.call('checkout.sessions', 'retrieve', row['session_id'])
+    validate(session)
+    if session.get('status') == 'open':
+        provider.call('checkout.sessions', 'expire', row['session_id'], {}, options={'idempotency_key': 'stx-expire-' + row['purchase_ref']})
+        session = provider.call('checkout.sessions', 'retrieve', row['session_id'])
+        validate(session)
+    require(session.get('status') == 'expired', "Previous checkout is not safely expired. Retry later.", 409)
+    db.execute("UPDATE checkout_requests SET state='expired' WHERE request_key=? AND state='pending'", (row['request_key'],))
+
+
 def create_checkout(ledger, provider, account_id, sku, request_key):
     require(sku in CREDIT_PACKS or sku in PLANS and sku != 'free', "Unknown paid SKU.")
     require(isinstance(account_id, str) and 1 <= len(account_id) <= 200, "Invalid account capability.")
@@ -195,13 +244,15 @@ def create_checkout(ledger, provider, account_id, sku, request_key):
         row = _request(db, request_key, account_id, sku)
         if not row:
             pending = db.execute("SELECT * FROM checkout_requests WHERE account_id=? AND state='pending' AND app=? AND mode=? ORDER BY attempted_at DESC LIMIT 1", (account_id, APP, provider.mode)).fetchone()
+            if pending and pending['sku'] != sku:
+                _release_checkout_choice(db, provider, pending)
+                pending = None
             if pending:
-                require(pending['sku'] == sku, "Finish the pending checkout before another purchase.", 409)
                 db.execute("INSERT INTO checkout_aliases VALUES (?,?,?,?)", (request_key, pending['request_key'], account_id, sku))
                 row = pending
             else:
                 if sku in PLANS:
-                    require(not db.execute("SELECT 1 FROM stx_subscriptions WHERE account_id=? AND terminal=0", (account_id,)).fetchone(), "Manage the existing subscription before buying another.", 409)
+                    require(not db.execute("SELECT 1 FROM stx_subscriptions WHERE account_id=? AND (terminal=0 OR retained_invoice_id IS NOT NULL AND paid_through>?)", (account_id, time.time())).fetchone(), "Manage the existing subscription before buying another.", 409)
                     require(not db.execute("SELECT 1 FROM checkout_requests WHERE account_id=? AND sku IN ('starter','business','firm') AND state='fulfilled' AND app IS NULL", (account_id,)).fetchone(), "Legacy subscription requires owner reconciliation.", 409)
                 ref = uuid.uuid4().hex
                 db.execute("INSERT INTO checkout_requests(request_key,account_id,sku,attempted_at,provider_key,app,mode,purchase_ref) VALUES (?,?,?,?,?,?,?,?)", (request_key, account_id, sku, time.time(), 'stx-checkout-' + ref, APP, provider.mode, ref))
@@ -359,6 +410,23 @@ def _invoice(db, obj, row, provider):
     else:
         db.execute("INSERT INTO stx_cycles(invoice_id,subscription_id,period_start,period_end,amount,reversed) VALUES (?,?,?,?,?,?)", (obj['id'], sub_id, start, end, amount(row['sku']), int(bool(paid['reversed'] or paid['disputed']))))
     state = db.execute("SELECT * FROM stx_subscriptions WHERE subscription_id=?", (sub_id,)).fetchone()
+    paid_at = (obj.get('status_transitions') or {}).get('paid_at')
+    cutoff = state['renewal_stop_at']
+    paid_before_stop = isinstance(paid_at, int) and isinstance(cutoff, int) and start <= paid_at < cutoff < end
+    # A late-delivered pre-stop payment can recover exactly its owed current
+    # period, never renew the terminal subscription. Provider period/end and
+    # paid timestamp must prove ordering; equal/missing timestamps are held.
+    stopped_by_reversal = state['renewal_stop_at'] is not None and db.execute('SELECT 1 FROM stx_actions WHERE subscription_id=?', (sub_id,)).fetchone()
+    ended_at = sub.get('ended_at')
+    confirmed_period = item['current_period_start'] == start and item['current_period_end'] == end
+    ended_after_payment = sub.get('status') in {'active', 'past_due'} or sub.get('status') == 'canceled' and isinstance(ended_at, int) and paid_at is not None and paid_at < ended_at
+    other_active = db.execute('SELECT 1 FROM stx_subscriptions WHERE account_id=? AND subscription_id!=? AND terminal=0', (row['account_id'], sub_id)).fetchone()
+    recover = state['terminal'] and stopped_by_reversal and paid_before_stop and confirmed_period and ended_after_payment and not other_active and not paid['reversed'] and not paid['disputed'] and start > state['cycle_start'] and end > time.time()
+    if recover:
+        db.execute('UPDATE stx_subscriptions SET cycle_start=?,paid_through=?,retained_invoice_id=? WHERE subscription_id=?', (start, end, obj['id'], sub_id))
+        db.execute('UPDATE accounts SET plan_id=?,pages_used=?,pro=1 WHERE id=?', (row['sku'], prior['used_pages'] if prior else 0, row['account_id']))
+        db.execute('UPDATE stx_cycles SET granted=1 WHERE invoice_id=?', (obj['id'],))
+        db.execute('INSERT OR IGNORE INTO entitlements VALUES (?,?,?)', ('purchase:' + row['purchase_ref'], row['account_id'], row['sku']))
     # Active is never payment evidence; both a paid invoice and the current
     # service period must match. Stale cycles are recorded but cannot reset use.
     if not state['terminal'] and not paid['reversed'] and not paid['disputed'] and start > state['cycle_start'] and end > time.time() and sub.get('status') in {'active', 'past_due'} and item['current_period_start'] == start and item['current_period_end'] == end:
@@ -370,17 +438,33 @@ def _invoice(db, obj, row, provider):
         # rather than acknowledge payment and permanently lose its allowance.
         raise BillingError('Paid cycle is awaiting provider confirmation. Retry later.')
     granted = db.execute('SELECT granted FROM stx_cycles WHERE invoice_id=?', (obj['id'],)).fetchone()[0]
+    if state['terminal'] and not prior and not granted and not paid['reversed'] and not paid['disputed'] and start >= state['cycle_start'] and end > time.time() and stopped_by_reversal:
+        # Paid evidence arriving after the renewal stop must not disappear into
+        # a silent acknowledgement. Without a pre-stop verified current grant,
+        # ordering/service owed needs explicit owner reconciliation, not revival.
+        db.execute("INSERT INTO stx_holds(purchase_ref,account_id,reason) VALUES (?,?,?) ON CONFLICT(purchase_ref) DO UPDATE SET resolved=0,reason=excluded.reason", (row['purchase_ref'], row['account_id'], 'paid_cycle_after_renewal_stop'))
+
     if granted and not state['terminal'] and not paid['reversed'] and not paid['disputed']:
         db.execute("UPDATE checkout_requests SET state=CASE WHEN state='pending' THEN 'fulfilled' ELSE state END WHERE purchase_ref=?", (row['purchase_ref'],))
         # Use the durable purchase ref even when invoice arrives before Checkout.
         db.execute("INSERT OR IGNORE INTO entitlements VALUES (?,?,?)", ('purchase:' + row['purchase_ref'], row['account_id'], row['sku']))
 
 
-def _reverse(db, row, pi_id, disputed, ambiguous=False):
+def _reverse(db, row, pi_id, disputed, ambiguous=False, reversal_at=None):
     payment = db.execute("SELECT * FROM stx_payments WHERE payment_intent=?", (pi_id,)).fetchone()
     require(payment and payment['purchase_ref'] == row['purchase_ref'])
     if payment['reversed'] and (not disputed or payment['disputed']):
         return  # Later deliveries never re-open an owner-resolved hold.
+    # Record the renewal-stop boundary before cancellation. A separately paid
+    # newer cycle can still arrive out of order via its own signed paid webhook;
+    # browser returns and refund/subscription objects never grant new pages.
+    if row['sku'] in PLANS:
+        state = db.execute("SELECT * FROM stx_subscriptions WHERE subscription_id=?", (payment['subscription_id'],)).fetchone()
+        if state and not state['terminal'] and not state['blocked']:
+            # Zero records a reversal stop with unknown provider ordering. It
+            # never counts as proof that a later payment predates this reversal.
+            cutoff = reversal_at if type(reversal_at) is int and reversal_at > 0 else 0
+            db.execute('UPDATE stx_subscriptions SET renewal_stop_at=COALESCE(renewal_stop_at,?) WHERE subscription_id=?', (cutoff, payment['subscription_id']))
     db.execute("UPDATE stx_payments SET reversed=1,disputed=MAX(disputed,?) WHERE payment_intent=?", (disputed, pi_id))
     consumed = False
     cancellation_pending = False
@@ -395,18 +479,24 @@ def _reverse(db, row, pi_id, disputed, ambiguous=False):
         cycle = db.execute("SELECT * FROM stx_cycles WHERE invoice_id=?", (payment['invoice_id'],)).fetchone()
         consumed = bool(cycle and cycle['used_pages'])
         db.execute("UPDATE stx_cycles SET reversed=1 WHERE invoice_id=?", (payment['invoice_id'],))
-        db.execute("UPDATE stx_subscriptions SET terminal=1,blocked=1 WHERE purchase_ref=?", (row['purchase_ref'],))
+        # Preserve only known, already-granted service from a strictly newer
+        # unreversed invoice. The terminal tombstone still rejects later grants.
+        state = db.execute("SELECT * FROM stx_subscriptions WHERE purchase_ref=?", (row['purchase_ref'],)).fetchone()
+        current = db.execute("SELECT c.* FROM stx_cycles c JOIN stx_payments p ON p.invoice_id=c.invoice_id WHERE c.subscription_id=? AND c.period_start=? AND c.period_end=? AND c.period_end>? AND c.granted=1 AND c.reversed=0 AND p.reversed=0 AND p.disputed=0", (payment['subscription_id'], state['cycle_start'], state['paid_through'], time.time())).fetchone()
+        accessible = not state['terminal'] and not state['blocked'] or bool(_retained_cycle(db, state))
+        retained = current['invoice_id'] if accessible and current and current['invoice_id'] != payment['invoice_id'] and (not cycle or current['period_start'] > cycle['period_start']) else None
+        db.execute("UPDATE stx_subscriptions SET terminal=1,blocked=1,retained_invoice_id=? WHERE purchase_ref=?", (retained, row['purchase_ref']))
         # Refunds don't cancel Stripe subscriptions. Persist the required stop
         # before provider I/O, so a crash cannot leave automatic renewal running.
         db.execute("INSERT OR IGNORE INTO stx_actions(subscription_id,purchase_ref,mode) VALUES (?,?,?)", (payment['subscription_id'], row['purchase_ref'], row['mode']))
-        cancellation_pending = not db.execute('SELECT complete FROM stx_actions WHERE subscription_id=?', (payment['subscription_id'],)).fetchone()[0]
+        cancellation_pending = not retained and not db.execute('SELECT complete FROM stx_actions WHERE subscription_id=?', (payment['subscription_id'],)).fetchone()[0]
     db.execute("UPDATE checkout_requests SET state='reversed' WHERE purchase_ref=?", (row['purchase_ref'],))
     if consumed or disputed or ambiguous or cancellation_pending:
         reason = 'reversal_needs_reconciliation' if consumed or disputed or ambiguous else 'provider_cancellation_pending'
         db.execute("INSERT INTO stx_holds(purchase_ref,account_id,reason) VALUES (?,?,?) ON CONFLICT(purchase_ref) DO UPDATE SET resolved=0,reason=CASE WHEN excluded.reason='reversal_needs_reconciliation' THEN excluded.reason ELSE stx_holds.reason END", (row['purchase_ref'], row['account_id'], reason))
     refresh_account_access(db, row['account_id'])
     if row['sku'] in CREDIT_PACKS:
-        active = db.execute("SELECT 1 FROM stx_subscriptions WHERE account_id=? AND terminal=0 AND blocked=0 AND paid_through>?", (row['account_id'], time.time())).fetchone()
+        active = any(s['paid_through'] > time.time() and (not s['terminal'] and not s['blocked'] or _retained_cycle(db, s)) for s in db.execute('SELECT * FROM stx_subscriptions WHERE account_id=?', (row['account_id'],)))
         pack = db.execute("SELECT 1 FROM stx_credit_lots WHERE account_id=? AND revoked=0", (row['account_id'],)).fetchone()
         db.execute("UPDATE accounts SET pro=? WHERE id=?", (bool(active or pack), row['account_id']))
 
@@ -490,7 +580,7 @@ def _apply_webhook(ledger, event, provider):
                 return {'received': True, 'ignored': True, 'granted': False}
             if kind == 'charge.refunded':
                 require(0 < charge.get('amount_refunded', 0) <= amount(row['sku']))
-            _reverse(db, row, pi_id, 'dispute' in kind, charge.get('amount_refunded', 0) != amount(row['sku']) and kind == 'charge.refunded')
+            _reverse(db, row, pi_id, 'dispute' in kind, charge.get('amount_refunded', 0) != amount(row['sku']) and kind == 'charge.refunded', obj.get('created') if 'dispute' in kind else event.get('created'))
         else:
             family = 'checkout' if kind.startswith('checkout.') else 'invoice' if kind.startswith('invoice.') else 'subscription'
             row = _owned(db, obj, provider, family)

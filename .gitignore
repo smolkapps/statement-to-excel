@@ -23,6 +23,7 @@ frontend/.vite/
 .env
 .env.*
 !.env.example
+!frontend/.env.production
 
 # OS / editor
 .DS_Store

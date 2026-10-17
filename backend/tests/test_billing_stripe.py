@@ -48,12 +48,17 @@ class PaymentDouble(StripeBillingProvider):
                 obj = self.sessions.setdefault(key, {'id': 'cs_' + self.mode + '_' + uuid.uuid4().hex,
                     'url': 'https://checkout.stripe.com/synthetic-only', 'livemode': live,
                     'amount_total': p['line_items'][0]['price_data']['unit_amount'], 'currency': 'usd',
-                    'mode': p['mode'], 'customer': p['customer'], 'metadata': p['metadata'], 'payment_status': 'unpaid'})
+                    'mode': p['mode'], 'customer': p['customer'], 'metadata': p['metadata'], 'payment_status': 'unpaid', 'status': 'open'})
                 self.objects[obj['id']] = obj
                 PURCHASES[obj['id']] = self
                 if self.fail_after_creation:
                     self.fail_after_creation = False
                     raise BillingError('Synthetic ambiguous timeout.')
+            elif resource == 'checkout.sessions' and method == 'expire':
+                obj = self.objects[args[0]]
+                if obj['status'] != 'open':
+                    raise BillingError('Synthetic Session is no longer open.')
+                obj['status'] = 'expired'
             elif resource == 'invoice_payments' and method == 'list':
                 params = args[0]
                 entries = [o for o in self.objects.values() if o.get('object') == 'invoice_payment']
@@ -71,6 +76,7 @@ class PaymentDouble(StripeBillingProvider):
                 assert args[1] == {'invoice_now': False, 'prorate': False}
                 obj = self.objects[args[0]]
                 obj['status'] = 'canceled'
+                obj['ended_at'] = int(time.time())
             else:
                 obj = self.objects[args[0]]
             return copy.deepcopy(obj)
@@ -78,6 +84,7 @@ class PaymentDouble(StripeBillingProvider):
     def paid(self, sid, start=None):
         obj = self.objects[sid]
         obj['payment_status'] = 'paid'
+        obj['status'] = 'complete'
         ref = obj['metadata']['purchase_ref']
         pi_id, ch_id = 'pi_' + uuid.uuid4().hex, 'ch_' + uuid.uuid4().hex
         pi = {'id': pi_id, 'livemode': self.mode == 'live', 'customer': obj['customer'], 'currency': 'usd', 'amount': obj['amount_total'], 'amount_received': obj['amount_total'], 'status': 'succeeded', 'latest_charge': ch_id, 'metadata': obj['metadata'] if obj['mode'] == 'payment' else {}}
@@ -92,10 +99,11 @@ class PaymentDouble(StripeBillingProvider):
             item_id = 'si_' + ref
             self.objects[sub_id] = {'id': sub_id, 'livemode': self.mode == 'live', 'customer': obj['customer'], 'metadata': obj['metadata'], 'status': 'active', 'cancel_at_period_end': False, 'items': {'has_more': False, 'data': [{'id': item_id, 'quantity': 1, 'current_period_start': start, 'current_period_end': end, 'price': {'unit_amount': obj['amount_total'], 'currency': 'usd', 'recurring': {'interval': 'month', 'interval_count': 1}}}]}}
             inv_id = 'in_' + uuid.uuid4().hex
-            self.objects[inv_id] = {'id': inv_id, 'livemode': self.mode == 'live', 'customer': obj['customer'], 'currency': 'usd', 'amount_due': obj['amount_total'], 'amount_paid': obj['amount_total'], 'status': 'paid', 'parent': {'type': 'subscription_details', 'subscription_details': {'subscription': sub_id, 'metadata': obj['metadata']}}, 'lines': {'has_more': False, 'data': [{'amount': obj['amount_total'], 'quantity': 1, 'period': {'start': start, 'end': end}, 'parent': {'type': 'subscription_item_details', 'subscription_item_details': {'subscription': sub_id, 'subscription_item': item_id, 'proration': False}}}]}}
+            self.objects[inv_id] = {'id': inv_id, 'livemode': self.mode == 'live', 'customer': obj['customer'], 'currency': 'usd', 'amount_due': obj['amount_total'], 'amount_paid': obj['amount_total'], 'status': 'paid', 'status_transitions': {'paid_at': int(time.time()) - 2}, 'parent': {'type': 'subscription_details', 'subscription_details': {'subscription': sub_id, 'metadata': obj['metadata']}}, 'lines': {'has_more': False, 'data': [{'amount': obj['amount_total'], 'quantity': 1, 'period': {'start': start, 'end': end}, 'parent': {'type': 'subscription_item_details', 'subscription_item_details': {'subscription': sub_id, 'subscription_item': item_id, 'proration': False}}}]}}
             pay_id = 'inpay_' + uuid.uuid4().hex
             self.objects[pay_id] = {'id': pay_id, 'object': 'invoice_payment', 'livemode': self.mode == 'live', 'currency': 'usd', 'invoice': inv_id, 'amount_requested': obj['amount_total'], 'amount_paid': obj['amount_total'], 'status': 'paid', 'payment': {'type': 'payment_intent', 'payment_intent': pi_id}}
             obj['subscription'], obj['invoice'] = sub_id, inv_id
+            self.objects[sub_id]['latest_invoice'] = inv_id
         return copy.deepcopy(obj)
 
 
@@ -106,7 +114,7 @@ def sign(payload, secret=SECRET, timestamp=None):
 
 
 def event(obj, kind='checkout.session.completed', event_id=None):
-    return {'id': event_id or 'evt_' + uuid.uuid4().hex, 'type': kind, 'livemode': obj['livemode'], 'api_version': API_VERSION, 'data': {'object': copy.deepcopy(obj)}}
+    return {'id': event_id or 'evt_' + uuid.uuid4().hex, 'type': kind, 'created': int(time.time()), 'livemode': obj['livemode'], 'api_version': API_VERSION, 'data': {'object': copy.deepcopy(obj)}}
 
 
 def buy(ledger, provider, sku='pack_50', key='purchase-request-000000001', account='buyer'):
@@ -187,8 +195,12 @@ def test_concurrent_plans_and_active_subscription_guard(ledger, provider):
         try: return buy(ledger, provider, sku, key='request-plan-key-' + sku)
         except BillingError as exc: return exc.status_code
     with ThreadPoolExecutor(max_workers=2) as pool: result = list(pool.map(invoke, ['starter', 'business']))
-    assert sum(isinstance(r, dict) for r in result) == 1 and result.count(409) == 1
-    sid = next(r['session_id'] for r in result if isinstance(r, dict))
+    assert any(isinstance(r, dict) for r in result)
+    # Choice changes may serialize as a confirmed expiry then a replacement;
+    # only one provider Session can remain payable.
+    open_sessions = [s for s in provider.sessions.values() if s['status'] == 'open']
+    assert len(open_sessions) == 1
+    sid = open_sessions[0]['id']
     apply_webhook(ledger, paid_event(sid), provider)
     with pytest.raises(BillingError, match='existing subscription'): buy(ledger, provider, 'firm', key='new-plan-key-000000000')
 

@@ -1,6 +1,7 @@
 name: CI
 on:
   push:
+    branches: [main]
   pull_request:
 jobs:
   python-backend:
@@ -85,6 +86,7 @@ jobs:
           mkdir -p ../work/provider-sdks
           curl --fail --silent --show-error --max-time 30 https://umami.smolkin.org/script.js -o ../work/provider-sdks/umami-script.js
           curl --fail --silent --show-error --max-time 30 https://static.cloudflareinsights.com/beacon.min.js -o ../work/provider-sdks/cf-beacon.js
+          curl --fail --silent --show-error --max-time 30 'https://www.googletagmanager.com/gtag/js?id=G-SYNTHETIC1' -o ../work/provider-sdks/google-gtag.js
           npx playwright test
       - uses: actions/upload-artifact@v4
         if: failure()

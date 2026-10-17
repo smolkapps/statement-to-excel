@@ -35,7 +35,14 @@ export function ownerQA(): boolean {
 
 export function persistentAccount(accountId: string): boolean {
   try {
-    if (localStorage.getItem("stx_account_id") !== accountId) return false;
+    const stored = localStorage.getItem("stx_account_id");
+    if (stored !== null && stored !== accountId) return false;
+    // A payment-button retry may persist this tab's retained capability after
+    // initial storage failure. Never replace a different stored account.
+    if (stored === null) {
+      localStorage.setItem("stx_account_id", accountId);
+      if (localStorage.getItem("stx_account_id") !== accountId) return false;
+    }
     const probe = crypto.randomUUID();
     localStorage.setItem("stx_storage_check", probe);
     const durable = localStorage.getItem("stx_storage_check") === probe;

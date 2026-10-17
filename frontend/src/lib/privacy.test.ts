@@ -48,6 +48,16 @@ describe('before-tracker URL privacy', () => {
     expect(bootstrap('https://statement-to-excel.apps.smolkin.org/?session_id=canary.pdf').target.takeReturn()).toEqual({ returning: false, sessionId: null });
   });
   afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
+  it('recovers the retained capability on an explicit retry after initial save failure', () => {
+    const blocked = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+    expect(persistentAccount('web_retained')).toBe(false);
+    blocked.mockRestore();
+    expect(persistentAccount('web_retained')).toBe(true);
+    expect(localStorage.getItem('stx_account_id')).toBe('web_retained');
+    localStorage.setItem('stx_account_id', 'web_other');
+    expect(persistentAccount('web_retained')).toBe(false);
+    expect(localStorage.getItem('stx_account_id')).toBe('web_other');
+  });
   it('requires durable readback before taking payment', () => {
     localStorage.setItem('stx_account_id', 'web_capability');
     expect(persistentAccount('web_capability')).toBe(true);

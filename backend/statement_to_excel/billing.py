@@ -380,6 +380,10 @@ class PersistentLedger(Ledger):
                 db.execute("CREATE UNIQUE INDEX IF NOT EXISTS stx_purchase_ref ON checkout_requests(purchase_ref)")
                 if 'granted' not in {row['name'] for row in db.execute('PRAGMA table_info(stx_cycles)')}:
                     db.execute('ALTER TABLE stx_cycles ADD COLUMN granted INTEGER NOT NULL DEFAULT 0')
+                if 'retained_invoice_id' not in {row['name'] for row in db.execute('PRAGMA table_info(stx_subscriptions)')}:
+                    db.execute('ALTER TABLE stx_subscriptions ADD COLUMN retained_invoice_id TEXT')
+                if 'renewal_stop_at' not in {row['name'] for row in db.execute('PRAGMA table_info(stx_subscriptions)')}:
+                    db.execute('ALTER TABLE stx_subscriptions ADD COLUMN renewal_stop_at INTEGER')
                 prior = db.execute("SELECT value FROM stx_settings WHERE key='billing_mode'").fetchone()
                 legacy = any(db.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone()
                              for table in ('accounts', 'checkout_requests', 'entitlements', 'subscription_state'))

@@ -88,6 +88,20 @@ describe("server-authoritative checkout", () => {
     } finally { blocked.mockRestore(); }
   });
 
+  it("recovers the initial in-memory capability after storage becomes available in the same tab", async () => {
+    localStorage.clear();
+    const blocked = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    await renderApp();
+    fireEvent.click(screen.getAllByRole("button", { name: LOCALES.en.pricing_buy })[0]);
+    expect(openCheckout).not.toHaveBeenCalled();
+    blocked.mockRestore();
+    openCheckout.mockResolvedValue({ session_id: "cs_test_recovered", checkout_url: "https://checkout.stripe.com/synthetic", mode: "test", provider: "stripe" });
+    fireEvent.click(screen.getAllByRole("button", { name: LOCALES.en.pricing_buy })[0]);
+    await waitFor(() => expect(openCheckout).toHaveBeenCalledTimes(1));
+    expect(openCheckout.mock.calls[0][0]).toBe(localStorage.getItem("stx_account_id"));
+    expect(navigateCheckout).toHaveBeenCalled();
+  });
+
   it.each(["starter", "business", "firm", "pack_50", "pack_200", "pack_1000"])("all six paid SKUs can open checkout: %s", async (sku) => {
     openCheckout.mockResolvedValue({ session_id: "cs_test_synthetic", checkout_url: "https://checkout.stripe.com/synthetic", mode: "test", provider: "stripe" });
     await renderApp();

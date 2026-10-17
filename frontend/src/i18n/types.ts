@@ -86,6 +86,9 @@ export interface Translation {
   analytics_consent: string;
   analytics_allow: string;
   analytics_decline: string;
+  analytics_save_error: string;
+  analytics_next_visit: string;
+  analytics_reload: string;
 
   // account
   account_title: string;

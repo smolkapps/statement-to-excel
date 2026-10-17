@@ -189,21 +189,29 @@ capability. Keep persistent browser storage: clearing it or changing devices los
 access; there is no login or automatic recovery. Contact the site owner for manual
 payment reconciliation. Stripe-hosted management supports payment methods and
 period-end cancellation; the server derives the Customer, never accepts a caller's
-Customer ID, and binds return URLs to the canonical app origin.
+Customer ID, and binds return URLs to the canonical app origin. If initial
+account storage fails, retrying the payment button can persist this tab's retained
+capability once storage recovers; it never replaces a different saved account.
 
 Use **separate durable test/live SQLite database paths**, shared by workers on one
 host. Customer/purchase references commit before provider calls; duplicate,
 concurrent, ambiguous and restarted requests reuse durable idempotency. Ambiguity
 after 23 hours requires owner reconciliation. New metadata is namespaced to this
 app with opaque purchase references; browser account IDs never enter Stripe
-metadata. Signed foreign-app events on the shared account are inert.
+metadata. Signed foreign-app events on the shared account are inert. Changing
+checkout choice after back/cancel reconciles the recorded old Session, expires
+only an owned open/unpaid choice, confirms expiry, then reserves the replacement.
+Same-SKU requests resume; paid/processing/unknown sessions remain protected.
 
 Paid initial Checkout/invoice evidence grants once. A matching newer paid invoice
 cycle resets pages once; browser returns and `active` objects never grant. Paid
 access expires on reads/debits even if webhooks are delayed. Period-end cancellation
 retains paid access through its end; terminal deletion/unpaid expiry ends recurring
 access and preserves separately purchased credits. Full refunds revoke only the
-purchase's remaining credits/access. Already consumed, partial or disputed
+affected purchase's remaining credits/access. Refunding an older invoice keeps
+a different, newer, unreversed paid period and its existing usage through that
+period's end, while stopping future renewal. Late pre-stop paid evidence must
+prove ordering; genuinely ambiguous evidence creates an owner hold. Already consumed, partial or disputed
 reversals create a durable owner-reconciliation hold, never a negative balance or
 automatic revival. Subscription reversals also queue immediate provider
 cancellation (`invoice_now=false`, `prorate=false`) after local commit, with
@@ -271,15 +279,34 @@ trackers load and drains payment returns into private application memory. Umami
 uses sanitized manual pageviews/events, a fixed page URL/title and empty referrer.
 No additional event properties are introduced.
 
-`VITE_GA_MEASUREMENT_ID` enables **optional** Google Analytics only after explicit
-consent, reversible here in all five locales. Ads, Signals and User-ID features
-stay off. Parent must disable GA Enhanced Measurement (including automatic
-history/search/form/download events) before providing a verified ID. Google may
-use anonymous browser identifiers; app account/payment/session tokens never enter
-tracking. `VITE_CF_WEB_ANALYTICS_TOKEN` enables one manual Cloudflare Web Analytics
-beacon (`spa:false`) with a verified token. Sensitive entry URLs and referrers
-suppress CF because original navigation timing can retain secrets after URL
-cleanup. Unset configuration loads neither provider. Consent/adblock failures do
+Public-only `frontend/.env.production` is tracked for fresh-clone builds run
+from `frontend/`, including rsync with deletion and no environment forwarding.
+It contains `VITE_GA_MEASUREMENT_ID=` and `VITE_CF_WEB_ANALYTICS_TOKEN=` with empty
+values until parent supplies verified public identities. Never put secrets there.
+Both optional providers default **off**. The five-localized consent controls name
+Google Analytics and Cloudflare Web Analytics, persist/read back the choice,
+and allow withdrawal. Existing Google-only acceptance does not authorize the new
+joint choice. If denial cannot be saved or stale acceptance removed, collection
+stops on this page and the UI reports storage recovery is needed; it does not
+reload into an old acceptance. Cross-tab revocation/clear also stops collection.
+
+Google receives only the five approved funnel names mapped to underscores
+(`file_selected`, `convert_success`, `convert_error`, `upgrade_click`,
+`checkout_opened`); historical Umami names stay unchanged. Google uses host-only
+app-prefixed cookies; withdrawal removes only this app's cookies. Ads, Signals
+and User-ID stay off. Parent must disable all GA Enhanced Measurement (including
+automatic history/search/form/download events) in the actual stream. Google runs in a disposable same-origin frame that receives only sanitized
+commands and no sensitive URL. Withdrawal stops its exit handlers and removes
+the context, including pending loads/diagnostic timers. This provides lifecycle
+isolation, not a security boundary against the trusted SDK.
+
+Cloudflare uses one manual `spa:false` beacon pinned to tested 2026.10.1 bytes
+with SRI; changed bytes fail optional loading closed until re-audited. Withdrawal
+suppresses its pending and lifecycle sends. Reallowing retired listeners takes
+effect on the next visit; an explicit reload control is available. No automatic
+reload discards conversion results. Both optional SDKs are suppressed for
+sensitive original URLs/referrers because diagnostics can bypass manual page
+metadata. Unset configuration loads neither provider. Consent/adblock failures do
 not block conversion or payments. Owner QA: set localStorage `stx_owner_qa` to
 `on` **before navigation and reload**; remove it and reload to resume normal use.
 QA receipts remain local and are never genuine acquisition evidence.

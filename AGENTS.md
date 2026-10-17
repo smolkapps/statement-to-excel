@@ -195,7 +195,9 @@ unused compatibility catalog data; never advertise them as actual charges or
 introduce postpaid billing. No trials, coupons, annual plans or new fees.
 
 The cryptographic browser account is a bearer capability. Require successful
-persistent browser storage/readback before checkout or management; disclose
+persistent browser storage/readback before checkout or management; an explicit
+payment retry may persist the same retained capability after initial storage
+failure only when no different stored account exists. Disclose
 browser-only access and no automatic/cross-device recovery. Use fixed POST URLs
 for account, Checkout status and portal requests; capabilities/payment tokens
 belong in bodies, never analytics or access URLs. Legacy GET routes exist only
@@ -222,7 +224,12 @@ subscription.items periods; do not restore removed legacy invoice fields.
 Customer and Checkout idempotency references commit before network calls. Reuse
 owned Customers and pending requests across concurrency/restarts. Ambiguous
 requests beyond 23 hours require owner reconciliation. Block duplicate initial
-subscriptions. Stripe-hosted portal derives its Customer solely from the account
+subscriptions, including retained paid service after an older-invoice reversal.
+Different-SKU checkout may replace an old choice only after retrieving its
+recorded app/account/customer/mode/purchase-owned Session and provider-confirmed
+unpaid expiry. Preserve all original keys/rows/aliases; never trust cancel URLs,
+expire completed/processing/foreign payments or discard an ambiguous creation.
+Stripe-hosted portal derives its Customer solely from the account
 binding, validates app ownership/mode and uses only the canonical app return URL
 (localhost permitted only for test). Parent supplies a dedicated portal
 configuration per mode with payment-method updates and period-end cancellation,
@@ -236,6 +243,15 @@ access while preserving separate packs. Stale events never revive terminal or
 reversed access. Full refunds revoke unused purchase credits/access atomically;
 consumed, partial or disputed reversals create a durable owner-reconciliation
 hold, preserving unrelated credits and consumed history without negative balances.
+Reverse the affected invoice cycle separately from the renewal stop. Refunding
+an older invoice preserves a different, newer, already-paid current invoice and
+its usage through its paid end, even after provider cancellation/deletion or a
+restart. Retain a durable invoice reference; its own reversal or expiry ends
+that service. Verified pre-stop paid invoices may recover out-of-order delivery
+once; missing/equal-second/conflicting ordering creates an explicit unresolved
+owner hold. Never revive an unrelated terminal subscription or grant a future
+cycle after the renewal stop. Cancellation confirmation must not resolve those
+reconciliation holds.
 Subscription reversals atomically queue verified immediate cancellation with no
 proration or new invoice, preventing future Stripe renewal. Provider I/O occurs
 after commit; durable leases/backoff and startup/30-second retries recover lost
@@ -259,18 +275,35 @@ title and empty referrer prevent statement/payment/account/search disclosure.
 
 Optional public build configuration: `VITE_GA_MEASUREMENT_ID` and
 `VITE_CF_WEB_ANALYTICS_TOKEN`; unset means no corresponding SDK. Parent supplies
-verified values, never guessed IDs. No Google request precedes explicit optional
-consent; choice is reversible, synchronized across tabs and localized in all five
-languages. Ads/Signals/User-ID features stay off. Parent must disable all GA
+verified values, never guessed IDs. The public-only tracked
+frontend/.env.production survives fresh-clone nested frontend builds; leave its
+two values empty until verified identities are supplied. Never put secrets there. Google and Cloudflare both default OFF until explicit optional
+consent. A versioned joint choice names both services; old Google-only acceptance
+must not enable either. Validate preference write/readback, stop SDKs before
+fallible denial persistence, remove stale acceptance when possible, and report
+unsaved withdrawal honestly without automatic reload. Handle cross-tab revocation
+and storage.clear(). Choice is localized in all five languages. Ads/Signals/User-ID features stay off. Parent must disable all GA
 Enhanced Measurement in the actual data stream before configuring its ID; source
-uses sanitized manual pageviews/funnel events only. Google can create anonymous
+uses sanitized manual pageviews/funnel events only. Preserve Umami's hyphenated
+names; Google's five names use underscores. Google cookies use host-only
+cookie_domain:none and app-owned stx prefix. Delete only this host's stx_ga and
+this stream's stx_ga_<ID>, never sibling/parent-domain cookies. Google can create anonymous
 browser/session identifiers; never confuse these with app capabilities/payment
 session tokens. Conversion/checkout cannot depend on tracking, consent or ads.
 
-Load Cloudflare's manual beacon once with spa:false; it may emit multiple
-lifecycle/vitals packets. Suppress it on sensitive original navigation URLs,
+Load Cloudflare's manual beacon once after consent with spa:false; it may emit multiple
+lifecycle/vitals packets. Suppress BOTH optional SDKs on sensitive original navigation URLs,
 visible query/hash/path or document referrers because SDK navigation timing can
-retain the original URL after replaceState. No DNS/proxy/TLS changes. Enable
+retain the original URL after replaceState. Google diagnostics can bypass manual
+page metadata and ga-disable. Use a disposable same-origin Google frame receiving
+only sanitized commands; stop its exit handlers before disposal on withdrawal,
+including pending SDK loads and diagnostics timers. This is lifecycle isolation,
+not a security boundary against a trusted same-origin SDK. Direct frame visits
+remain inert; recheck consent/current frame before initialization.
+The pinned CF 2026.10.1 beacon uses a consent-controlled global accessor; SRI
+fails closed on changed bytes. Retire its listeners for this document after
+withdrawal; reallow can require an explicit next visit/reload without discarding
+in-memory conversion automatically. No DNS/proxy/TLS changes. Enable
 owner QA before navigation with localStorage stx_owner_qa='on', then reload;
 all providers are suppressed and QA evidence stays local. Never generate fake
 provider ingestion or call synthetic visits genuine acquisition. Inspect actual
@@ -278,7 +311,7 @@ SDK serialized bodies with synthetic canaries, not callback counts alone.
 
 Preserve the exact document-memory/deletion promises in all locales while
 accurately disclosing retained billing/idempotency metadata, anonymous usage and
-optional Google analytics. Parent handles app-specific nginx/uvicorn URL log
+optional Google/Cloudflare analytics. Parent handles app-specific nginx/uvicorn URL log
 suppression; do not claim it is installed from this repository. See
 `docs/codex-live-billing-2026-10-16.md` for provider setup and verification limits.
 
