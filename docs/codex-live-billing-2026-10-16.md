@@ -5,10 +5,11 @@ Repository: smolkapps/statement-to-excel. Branch:
 `575d0e4c15f24cf6ce87e6496c7c3be19ead986a` (merged PR #7).
 Correction B continues reviewed delivery b23cfc04996ab83acbeb4079df30c7149231f460.
 Refreshed parent commit 8b9dbda64904db0eb4427dc3dfeb09c559a552a4 was fast-forwarded
-and preserved (Studio Linux runners and WORKLOG). Verified corrective code head:
-8e0519fd9e120deb7b217c911cad13b86f0a6395.
-This report is a documentation-only follow-up to that implementation commit;
-the PR records its current delivery head. PRs #5/#6/#7 and their branches/reports
+and preserved (Studio Linux runners and WORKLOG). Initial corrective code:
+8e0519fd9e120deb7b217c911cad13b86f0a6395. Final verified implementation head:
+11a6d5981946c6315cde7ac286f2d33209d6f279 (owned unpaid PI recovery).
+The PR records the exact current delivery head including this report update. PRs #5/#6/#7
+and their branches/reports
 are preserved. No other open PR owned this work at the initial or final remote
 check. Nothing was pushed to main, merged or deployed.
 
@@ -123,13 +124,30 @@ cancellation cannot acquire retained service. Duplicate deliveries do not reset
 usage or reopen an owner-resolved hold.
 
 Changing SKU after cancel/back now retrieves the recorded old app/account/mode/
-purchase/customer-owned Session. Only open+unpaid with no PaymentIntent or
+purchase/customer-owned Session. Only open+unpaid without an already-created
 Subscription may be expired, using its own deterministic key; retrieval must
-confirm expired+unpaid before replacing the reservation. Same-SKU resumes.
+confirm expired+unpaid before replacing the reservation. An unpaid linked
+PaymentIntent is allowed only after verifying its ID/customer/mode/app/purchase,
+server-owned USD amount, zero received/capturable amounts and one of
+requires_payment_method/requires_confirmation/requires_action/canceled. Recheck
+it after expiry, including a newly linked PI or a previously linked PI whose
+reference disappeared. Changed IDs, paid/processing/capturable/conflicting
+evidence retain the original reservation. Stripe's documented authority is the
+expired Session, which cannot be completed; immediate PI cancellation propagation
+is not assumed. Never call PaymentIntent.cancel. Same-SKU resumes.
 Completed/processing/foreign/conflicting or ID-unknown creation remains protected.
 Lost expiry responses retrieve the same Session after restart; original purchase
 rows, request keys and aliases remain. Active or retained paid plans still block
 another initial subscription. A cancel query is never financial evidence.
+
+This follow-on was identified during final official-contract inspection:
+[Checkout expiration](https://docs.stripe.com/api/checkout/sessions/expire)
+permits an open Session even when it already has an unpaid PaymentIntent, and
+the pinned official SDK directs Checkout-linked PI cancellation to Session
+expiry. Regressions exercise both modes, pack-to-pack/plan changes, unpaid PI
+states, response loss/restart, conflicting ownership/amounts, and payment races.
+Only synthetic provider objects were used; genuine hosted back/cancel remains
+parent verification.
 
 The retained browser capability can now be persisted/read back on an explicit
 payment-button retry after an initial storage-save failure, only when no different
@@ -205,7 +223,7 @@ report path is retained.
 
 | Check | Current result |
 | --- | --- |
-| Full backend | **479 passed**, 0 failures/skips (13 SDK/Starlette deprecation warnings) |
+| Full backend | **521 passed**, 0 failures/skips (13 SDK/Starlette deprecation warnings) |
 | Frontend | **208 passed**, 12 files, 0 failures/skips |
 | Production build | TypeScript, SEO contract and Vite build passed |
 | HTTP routing | **2 passed** (dev and production preview) |
@@ -222,6 +240,8 @@ invoice-before-checkout, renewal/replay, cancellation now/period end,
 failure/expiry/paid recovery, shared-account isolation, portal ownership,
 refund/dispute/partial/consumed reversals, cancellation lost responses/startup,
 monotonic holds, restarts/concurrency, preserved packs and legacy mode migration.
+The final linked-PI follow-up adds 42 intent/state/race cases: full backend
+increased from 479 to 521. Its focused checkout/billing run passed 163 tests.
 No actual hosted Stripe payment/checkout arrival is claimed.
 
 Actual current official Umami, Cloudflare and Google SDK bytes execute with
@@ -312,13 +332,15 @@ installed through teardown, so no synthetic ingestion escapes. Product code,
 financial tests and build behavior are unchanged. Both browser suites were
 replayed after the repair.
 
-At delivery the three required final-head Linux jobs awaited an assigned
-parent-owned Studio Linux ARM64 runner; the parent's preceding 8b9 runs were also
-queued. This is an external CI verification limit, not a final-head green claim.
-The superseded task-owned queued run was canceled to avoid wasted CI minutes;
-parent-owned runs/settings were preserved. Latest status is on PR8/checks and
-not inferred from fixtures. Parent owns independent
-review and genuine provider verification.
+The preceding 50edf84 workflow completed browser-end-to-end and python-backend
+successfully on the parent-owned Studio Linux ARM64 runner; node-frontend was
+still awaiting a runner when the official-contract PI follow-up was prepared.
+That follow-up passed the full local suites again before pushing. Final delivery
+head and Linux job results are recorded in PR8/checks, separately from these
+local results. Superseded task-owned queued jobs are canceled to conserve
+minutes; parent-owned runs/settings remain untouched. Raw GitHub job-log download
+was blocked by its storage host here; job/step metadata remained available.
+Parent owns independent review and genuine provider verification.
 
 ### Per-family synthetic corpus
 

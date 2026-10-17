@@ -45,3 +45,10 @@ the PI directly. Preserve reservations on processing, paid or conflicting races.
 Cover both modes, choice changes, expiry response loss/restart and late PI state
 changes using synthetic objects. Revalidate required suites before one follow-up
 push; previous final-head browser/backend CI jobs passed, frontend still queued.
+
+Final local candidate: 521 backend, 208 frontend, build/SEO/TypeScript, 2 routing,
+22 synthetic statements/14 families/372 exact rows, zero silent errors/false
+alarms; 29 Chromium and 29 agent-owned Camoufox passed. Actual blocked SDK
+receipts and desktop/narrow layouts inspected; two downloaded Checks workbooks
+independently calculate printed closing figures (stored formula caches blank).
+No genuine provider, device/simulator or real-bank verification is claimed.
