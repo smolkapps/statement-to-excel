@@ -216,17 +216,39 @@ def _release_checkout_choice(db, provider, row):
         require(session.get('id') == row['session_id'] and ident(session.get('customer')) == row['customer_id'] and session.get('metadata') == metadata(row['purchase_ref']))
         require(session.get('mode') == ('payment' if row['sku'] in CREDIT_PACKS else 'subscription') and session.get('amount_total') == amount(row['sku']) and session.get('currency') == 'usd')
         require(session.get('payment_status') == 'unpaid', "Previous checkout payment is awaiting signed confirmation.", 409)
-        # Once payment/subscription creation has started, expiry alone cannot
-        # prove that an async payment or subscription won't complete later.
-        require(not session.get('payment_intent') and not session.get('subscription'), "Previous checkout payment is still being reconciled.", 409)
+        require(not session.get('subscription'), "Previous checkout payment is still being reconciled.", 409)
+        payment_id = ident(session.get('payment_intent'))
+        require(not payment_id or session['mode'] == 'payment')
+        return payment_id
+
+    def validate_unpaid_payment(payment_id):
+        if not payment_id:
+            return
+        payment = provider.call('payment_intents', 'retrieve', payment_id)
+        provider.validate_object(payment)
+        require(payment.get('id') == payment_id and ident(payment.get('customer')) == row['customer_id'] and payment.get('metadata') == metadata(row['purchase_ref']))
+        require(payment.get('amount') == amount(row['sku']) and payment.get('currency') == 'usd')
+        require(payment.get('status') in {'requires_payment_method', 'requires_confirmation', 'requires_action', 'canceled'} and
+                payment.get('amount_received') == 0 and payment.get('amount_capturable') == 0,
+                "Previous checkout payment is still being reconciled.", 409)
 
     session = provider.call('checkout.sessions', 'retrieve', row['session_id'])
-    validate(session)
+    payment_id = validate(session)
+    validate_unpaid_payment(payment_id)
     if session.get('status') == 'open':
+        # Stripe permits linked unpaid PaymentIntents. Its contract requires
+        # expiring Checkout (never canceling/confirming the PI directly), and
+        # guarantees that an expired Session cannot be completed.
         provider.call('checkout.sessions', 'expire', row['session_id'], {}, options={'idempotency_key': 'stx-expire-' + row['purchase_ref']})
         session = provider.call('checkout.sessions', 'retrieve', row['session_id'])
-        validate(session)
+        confirmed_payment_id = validate(session)
+        require(not payment_id or not confirmed_payment_id or payment_id == confirmed_payment_id)
+        payment_id = confirmed_payment_id or payment_id
     require(session.get('status') == 'expired', "Previous checkout is not safely expired. Retry later.", 409)
+    # Check again after expiry, including a PI newly created during the race or
+    # one no longer expanded/referenced by the expired Session. Processing or
+    # settled evidence retains the original reservation for signed reconciliation.
+    validate_unpaid_payment(payment_id)
     db.execute("UPDATE checkout_requests SET state='expired' WHERE request_key=? AND state='pending'", (row['request_key'],))
 
 

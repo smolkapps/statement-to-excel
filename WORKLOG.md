@@ -36,3 +36,12 @@ Follow-up: retaining raw SDK receipts exposed a synthetic-HTTPS proxy teardown
 race after page closure. Guard only closed-page cancellation, keep all provider
 routes installed, and rerun browser suites. Product code is unchanged. Final CI
 awaits parent-owned Studio runner assignment; no runner setting was changed.
+
+Final contract follow-up: Stripe allows an open unpaid Checkout Session to have
+a PaymentIntent. Replace the overly restrictive absence guard with owned
+customer/mode/app/purchase/USD and unpaid/zero-received/capturable checks before
+and after Session expiry. Session expiry is the provider authority; never cancel
+the PI directly. Preserve reservations on processing, paid or conflicting races.
+Cover both modes, choice changes, expiry response loss/restart and late PI state
+changes using synthetic objects. Revalidate required suites before one follow-up
+push; previous final-head browser/backend CI jobs passed, frontend still queued.

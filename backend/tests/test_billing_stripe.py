@@ -59,6 +59,9 @@ class PaymentDouble(StripeBillingProvider):
                 if obj['status'] != 'open':
                     raise BillingError('Synthetic Session is no longer open.')
                 obj['status'] = 'expired'
+                payment = self.objects.get(obj.get('payment_intent'))
+                if payment and payment['status'] in {'requires_payment_method', 'requires_confirmation', 'requires_action'}:
+                    payment['status'] = 'canceled'
             elif resource == 'invoice_payments' and method == 'list':
                 params = args[0]
                 entries = [o for o in self.objects.values() if o.get('object') == 'invoice_payment']

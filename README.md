@@ -201,7 +201,10 @@ app with opaque purchase references; browser account IDs never enter Stripe
 metadata. Signed foreign-app events on the shared account are inert. Changing
 checkout choice after back/cancel reconciles the recorded old Session, expires
 only an owned open/unpaid choice, confirms expiry, then reserves the replacement.
-Same-SKU requests resume; paid/processing/unknown sessions remain protected.
+An already-created unpaid PaymentIntent is verified before and after Session
+expiry, including ownership, amount and zero received/capturable funds; it is
+never canceled directly. Same-SKU requests resume; paid/processing/unknown
+sessions remain protected.
 
 Paid initial Checkout/invoice evidence grants once. A matching newer paid invoice
 cycle resets pages once; browser returns and `active` objects never grant. Paid

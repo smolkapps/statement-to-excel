@@ -229,6 +229,11 @@ Different-SKU checkout may replace an old choice only after retrieving its
 recorded app/account/customer/mode/purchase-owned Session and provider-confirmed
 unpaid expiry. Preserve all original keys/rows/aliases; never trust cancel URLs,
 expire completed/processing/foreign payments or discard an ambiguous creation.
+An open Session may already have an unpaid PaymentIntent. Verify its owned
+reference/customer/mode/USD amount, zero received/capturable amounts and unpaid
+state before and after expiring that Session. Only Checkout expiry prevents its
+completion; never cancel its PaymentIntent directly. Reject conflicting,
+processing, settled or capturable evidence and retain the original reservation.
 Stripe-hosted portal derives its Customer solely from the account
 binding, validates app ownership/mode and uses only the canonical app return URL
 (localhost permitted only for test). Parent supplies a dedicated portal

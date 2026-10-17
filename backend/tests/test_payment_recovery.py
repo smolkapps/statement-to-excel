@@ -22,6 +22,17 @@ def invoice_charge(provider, invoice):
     return provider.objects[provider.objects[pi]['latest_charge']]
 
 
+def unpaid_payment(provider, session_id, status='requires_payment_method'):
+    session = provider.objects[session_id]
+    payment = {'id': 'pi_' + uuid.uuid4().hex, 'livemode': provider.mode == 'live',
+        'customer': session['customer'], 'currency': 'usd', 'amount': session['amount_total'],
+        'amount_received': 0, 'amount_capturable': 0, 'status': status,
+        'metadata': copy.deepcopy(session['metadata'])}
+    provider.objects[payment['id']] = payment
+    session['payment_intent'] = payment['id']
+    return payment
+
+
 @pytest.mark.parametrize('used', [0, 3])
 @pytest.mark.parametrize('lost_cancel', [False, True])
 def test_old_only_refund_retains_newer_service_after_cancel_restart_and_delays(ledger, provider, monkeypatch, used, lost_cancel):
@@ -98,17 +109,19 @@ def test_changed_choice_expires_same_owned_session_and_preserves_history(ledger,
     assert ledger.get_or_create('buyer').credits == 0
 
 
-def test_choice_expiry_response_loss_retrieves_same_session_after_restart(ledger, provider, monkeypatch):
-    old = buy(ledger, provider, 'starter'); original = provider.call
+@pytest.mark.parametrize(('before', 'after'), [('starter', 'business'), ('pack_50', 'starter')])
+def test_choice_expiry_response_loss_retrieves_same_session_after_restart(ledger, provider, monkeypatch, before, after):
+    old = buy(ledger, provider, before); original = provider.call
+    if before.startswith('pack'): unpaid_payment(provider, old['session_id'], 'requires_action')
     def lost(resource, method, *args, **kwargs):
         result = original(resource, method, *args, **kwargs)
         if (resource, method) == ('checkout.sessions','expire'): raise BillingError('Synthetic expiry response loss')
         return result
     monkeypatch.setattr(provider, 'call', lost)
     key = str(uuid.uuid4())
-    with pytest.raises(BillingError): buy(ledger, provider, 'business', key)
+    with pytest.raises(BillingError): buy(ledger, provider, after, key)
     assert provider.objects[old['session_id']]['status'] == 'expired'
-    newer = buy(PersistentLedger(ledger.database_path), provider, 'business', key)
+    newer = buy(PersistentLedger(ledger.database_path), provider, after, key)
     assert newer['session_id'] != old['session_id']
     assert len([r for r in provider.requests if r[:2] == ('checkout.sessions','expire')]) == 1
 
@@ -121,15 +134,17 @@ def test_choice_cannot_expire_conflicting_or_inflight_payment(ledger, provider, 
     elif mutation == 'livemode': obj['livemode'] = True
     elif mutation == 'amount_total': obj['amount_total'] = 1
     elif mutation == 'mode': obj['mode'] = 'subscription'
-    elif mutation == 'processing': obj['payment_intent'] = 'pi_processing'
+    elif mutation == 'processing': unpaid_payment(provider, obj['id'], 'processing')
     else: provider.paid(obj['id'])
     with pytest.raises(BillingError): buy(ledger, provider, 'business', str(uuid.uuid4()))
     assert not [r for r in provider.requests if r[:2] == ('checkout.sessions','expire')]
     assert len(provider.sessions) == 1
 
 
-def test_payment_wins_expiry_race_without_duplicate_or_return_grant(ledger, provider, monkeypatch):
+@pytest.mark.parametrize('linked_payment', [False, True])
+def test_payment_wins_expiry_race_without_duplicate_or_return_grant(ledger, provider, monkeypatch, linked_payment):
     old = buy(ledger, provider); original = provider.call
+    if linked_payment: unpaid_payment(provider, old['session_id'], 'requires_action')
     def race(resource, method, *args, **kwargs):
         if (resource, method) == ('checkout.sessions','expire'): provider.paid(old['session_id'])
         return original(resource, method, *args, **kwargs)
@@ -150,6 +165,82 @@ def test_unknown_session_keeps_original_ambiguous_create_key(ledger, provider):
     assert len(provider.sessions) == 1
     resumed = buy(PersistentLedger(ledger.database_path), provider, 'starter')
     assert resumed['session_id'] == next(iter(provider.sessions.values()))['id']
+
+
+@pytest.mark.parametrize('mode', ['test', 'live'])
+@pytest.mark.parametrize('status', ['requires_payment_method', 'requires_confirmation', 'requires_action', 'canceled'])
+@pytest.mark.parametrize('after', ['pack_200', 'starter'])
+def test_changed_pack_choice_can_expire_owned_unpaid_payment_intent(tmp_path, mode, status, after):
+    provider = PaymentDouble(mode)
+    ledger = PersistentLedger(str(tmp_path / 'billing.sqlite3'), mode)
+    old = buy(ledger, provider)
+    payment = unpaid_payment(provider, old['session_id'], status)
+    assert buy(ledger, provider, key=str(uuid.uuid4())) == old  # Same choice resumes.
+    newer = buy(PersistentLedger(ledger.database_path, mode), provider, after, str(uuid.uuid4()))
+    assert newer['session_id'] != old['session_id'] and len(provider.sessions) == 2
+    assert provider.objects[old['session_id']]['status'] == 'expired'
+    assert payment['status'] == 'canceled'
+    assert len([r for r in provider.requests if r[:2] == ('payment_intents', 'retrieve')]) == 2
+    assert not [r for r in provider.requests if r[:2] == ('payment_intents', 'cancel')]
+    assert ledger.get_or_create('buyer').credits == 0
+
+
+@pytest.mark.parametrize('mutation', ['id', 'customer', 'metadata', 'livemode', 'amount', 'currency',
+    'amount_received', 'amount_capturable', 'processing', 'succeeded', 'requires_capture', 'unknown',
+    'missing_status', 'missing_amount_received', 'missing_amount_capturable'])
+def test_choice_rejects_foreign_conflicting_or_inflight_linked_payment(ledger, provider, mutation):
+    old = buy(ledger, provider)
+    payment = unpaid_payment(provider, old['session_id'])
+    if mutation in {'processing', 'succeeded', 'requires_capture', 'unknown'}: payment['status'] = mutation
+    elif mutation.startswith('missing_'): payment.pop(mutation.removeprefix('missing_'))
+    else: payment[mutation] = {'id': 'pi_foreign', 'customer': 'cus_foreign', 'metadata': {'app': 'other-app'},
+        'livemode': True, 'amount': 1, 'currency': 'eur', 'amount_received': 1, 'amount_capturable': 1}[mutation]
+    key = str(uuid.uuid4())
+    for current in [ledger, PersistentLedger(ledger.database_path)]:
+        with pytest.raises(BillingError): buy(current, provider, 'starter', key)
+    assert len(provider.sessions) == 1
+    assert not [r for r in provider.requests if r[:2] == ('checkout.sessions', 'expire')]
+
+
+@pytest.mark.parametrize('race', ['processing', 'succeeded', 'capturable', 'paid', 'swapped_pi', 'not_expired'])
+def test_expiry_confirmation_rechecks_payment_before_releasing_reservation(ledger, provider, monkeypatch, race):
+    old = buy(ledger, provider)
+    payment = unpaid_payment(provider, old['session_id'])
+    original = provider.call
+    def changed(resource, method, *args, **kwargs):
+        result = original(resource, method, *args, **kwargs)
+        if (resource, method) == ('checkout.sessions', 'expire'):
+            session = provider.objects[old['session_id']]
+            if race in {'processing', 'succeeded'}: payment['status'] = race
+            elif race == 'capturable': payment['amount_capturable'] = payment['amount']
+            elif race == 'paid': session['payment_status'] = 'paid'
+            elif race == 'swapped_pi': unpaid_payment(provider, old['session_id'])
+            else: session['status'] = 'open'
+        return result
+    monkeypatch.setattr(provider, 'call', changed)
+    with pytest.raises(BillingError): buy(ledger, provider, 'starter', str(uuid.uuid4()))
+    assert len(provider.sessions) == 1 and ledger.get_or_create('buyer').credits == 0
+    with ledger.transaction() as db:
+        row = db.execute('SELECT * FROM checkout_requests').fetchone()
+        assert row['state'] == 'pending' and row['session_id'] == old['session_id']
+
+
+@pytest.mark.parametrize('reference', ['appears', 'cleared', 'unpaid_after_expiry'])
+def test_expired_session_is_authority_with_owned_unpaid_payment_recheck(ledger, provider, monkeypatch, reference):
+    old = buy(ledger, provider)
+    payment = None if reference == 'appears' else unpaid_payment(provider, old['session_id'])
+    original = provider.call
+    def changed(resource, method, *args, **kwargs):
+        result = original(resource, method, *args, **kwargs)
+        if (resource, method) == ('checkout.sessions', 'expire'):
+            if reference == 'appears': unpaid_payment(provider, old['session_id'], 'canceled')
+            elif reference == 'cleared': provider.objects[old['session_id']]['payment_intent'] = None
+            else: payment['status'] = 'requires_payment_method'  # Expiry prevents Checkout completion even before PI cancellation propagates.
+        return result
+    monkeypatch.setattr(provider, 'call', changed)
+    assert buy(ledger, provider, 'starter', str(uuid.uuid4()))['session_id'] != old['session_id']
+    assert provider.objects[old['session_id']]['status'] == 'expired'
+    assert [r for r in provider.requests if r[:2] == ('payment_intents', 'retrieve')]
 
 
 def test_paid_renewal_before_old_refund_is_recovered_when_its_webhook_is_delayed(ledger, provider):
