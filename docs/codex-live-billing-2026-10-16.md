@@ -3,7 +3,10 @@
 Repository: smolkapps/statement-to-excel. Branch:
 `codex/live-billing-analytics-20261016`. Refreshed base:
 `575d0e4c15f24cf6ce87e6496c7c3be19ead986a` (merged PR #7).
-Verified implementation head: 3803d2a87d355ef9b7acd0d4ffcd436c0ba9fa08.
+Correction B continues reviewed delivery b23cfc04996ab83acbeb4079df30c7149231f460.
+Refreshed parent commit 8b9dbda64904db0eb4427dc3dfeb09c559a552a4 was fast-forwarded
+and preserved (Studio Linux runners and WORKLOG). Verified corrective code head:
+8e0519fd9e120deb7b217c911cad13b86f0a6395.
 This report is a documentation-only follow-up to that implementation commit;
 the PR records its current delivery head. PRs #5/#6/#7 and their branches/reports
 are preserved. No other open PR owned this work at the initial or final remote
@@ -95,6 +98,43 @@ origin (localhost only in test). Management remains available to an owned Custom
 after subscription expiry. Webhook provider I/O runs in the thread pool; health
 runs directly on the event loop.
 
+## PR8 correction B — paid service, checkout and privacy
+
+An old-only invoice refund now reverses that payment/cycle and stops renewal
+without deleting another known paid current invoice. A durable
+`retained_invoice_id` keeps its paid-through and existing usage after provider
+cancellation/deletion and restart. Starter A unused / B used 3 retains B's 117
+pages; unused B retains 120. Reversing B or reaching its paid end removes that
+service. Separate packs and consumed history remain intact. Genuine consumed,
+partial or disputed reversal holds remain unresolved after cancellation and keep
+usage for owner reconciliation; an unused old-only refund does not invent such
+a hold merely because cancellation is pending.
+
+New allowance still requires a signed paid webhook. A delayed paid B can recover
+once only when the full owned paid invoice/PI/charge evidence proves its current
+period was paid before the stored renewal stop and provider termination. Use
+Invoice.status_transitions.paid_at, the signed refund event's created timestamp,
+Dispute.created (not a later update/closed event timestamp), and Subscription.ended_at
+(not scheduling-time canceled_at). Missing/equal-second/conflicting evidence
+creates durable `paid_cycle_after_renewal_stop` reconciliation instead of silently
+acknowledging lost service or granting a future cycle. No refund, return, active
+object, outbox cancellation or read grants new pages. An unrelated prior terminal
+cancellation cannot acquire retained service. Duplicate deliveries do not reset
+usage or reopen an owner-resolved hold.
+
+Changing SKU after cancel/back now retrieves the recorded old app/account/mode/
+purchase/customer-owned Session. Only open+unpaid with no PaymentIntent or
+Subscription may be expired, using its own deterministic key; retrieval must
+confirm expired+unpaid before replacing the reservation. Same-SKU resumes.
+Completed/processing/foreign/conflicting or ID-unknown creation remains protected.
+Lost expiry responses retrieve the same Session after restart; original purchase
+rows, request keys and aliases remain. Active or retained paid plans still block
+another initial subscription. A cancel query is never financial evidence.
+
+The retained browser capability can now be persisted/read back on an explicit
+payment-button retry after an initial storage-save failure, only when no different
+stored account exists. Free conversion remains usable without storage.
+
 ## Tracking and privacy
 
 The single existing Umami destination remains
@@ -109,24 +149,46 @@ A blocking bootstrap captures payment returns, removes all query/hash/history
 state, then drains the return into a private module cache before any tracker.
 Polling uses POST bodies, as do account/portal requests. Missing bootstrap prevents
 all SDK loading; conversion and private return recovery still work. The bootstrap
-also checks original navigation-timing URLs and referrers. Cloudflare is suppressed
+also checks original navigation-timing URLs and referrers. Both optional SDKs are suppressed
 on sensitive entries because replaceState cannot erase those originals.
 
-Public build configuration `VITE_GA_MEASUREMENT_ID` and
-`VITE_CF_WEB_ANALYTICS_TOKEN` are unset by default. No guessed production IDs or
-second Umami tag were added. Google requires explicit optional consent before
-any Google request; a local choice is reversible and synchronized across tabs,
-with all copy/controls in five locales. Manual sanitized pageviews and approved
-funnel events only; Ads/Signals/User-ID features are off. Parent must disable
-Enhanced Measurement in the actual Google data stream before setting its verified
-ID. Google may create anonymous browser/session identifiers; app capability and
-payment-session tokens are excluded.
+Tracked, public-only `frontend/.env.production` contains empty
+`VITE_GA_MEASUREMENT_ID=` and `VITE_CF_WEB_ANALYTICS_TOKEN=`. Parent supplies
+verified public values there; fresh nested frontend builds need no forwarding.
+No secrets or guessed production identities are included. Optional Google AND
+Cloudflare default OFF behind a new versioned joint choice naming both services
+in all five locales. Legacy `stx_google_consent=yes` does not authorize either.
+Allow/deny require write/readback. Withdrawal stops the SDKs before persistence,
+removes stale acceptance when possible, and reports unsaved denial honestly if
+both write/removal fail. A same-tab session denial is an additional fallback;
+allowing again also requires clearing/readback of that marker. Cross-tab
+revocation and storage.clear() stop collection. No automatic reload loses results
+or re-enables stale acceptance. Retired SDKs reallow on the next visit via an
+explicit reload control.
 
-Cloudflare loads one manual SDK with spa:false when a verified token is supplied
-on a safe entry. Its normal lifecycle may send multiple timing/vitals packets.
-No DNS/proxy/TLS changes were made. Owner QA uses nonsensitive localStorage
-`stx_owner_qa=on` before navigation plus reload, suppressing every provider. Remove
-the value and reload to resume normal tracking. QA receipts stay local.
+Google's five approved names use underscores; historical Umami names stay
+hyphenated. Only convert_success has the same balanced/layout enums. No new
+funnel event, property, destination or analytics backend/proxy was added. Actual
+Google diagnostics were observed bypassing ga-disable during pending startup.
+Google now executes official unmodified bytes inside a small disposable
+same-origin frame with a clean static URL/no referrer, receiving only sanitized
+commands. Before removal, its stop control blocks SDK exit handlers; removal
+terminates pending loads and diagnostic timers. This is lifecycle isolation,
+not a security boundary against a trusted same-origin SDK. Direct helper visits
+are inert. Parent/current-frame/consent checks guard initialization. Cookies use
+host-only cookie_domain:none, prefix stx, path / and Secure on HTTPS. Withdrawal
+deletes only this host's stx_ga and current-stream cookie; parent/sibling and
+other-property sentinels survive. Ads/Signals/User-ID remain off. Parent must
+disable all Enhanced Measurement in the actual Google stream before providing ID.
+
+Cloudflare's 2026.10.1 SDK is SRI-pinned; changed bytes fail optional loading closed
+until re-audited. Its consent-controlled global accessor rejects late initialization
+and stops lifecycle sends after withdrawal. Listeners remain retired for this
+document so reallow cannot revive old observers. The beacon uses spa:false; one
+load can send several legitimate lifecycle packets. No DNS/proxy/TLS setting was
+changed. Both optional SDKs exclude lifetime-sensitive original URL/referrer/path
+contexts, including sanitized payment returns. Owner QA uses localStorage
+stx_owner_qa=on before reload and suppresses all providers. QA receipts stay local.
 
 The exact document-memory/deletion promise is unchanged in all locales. Retained
 account/usage/customer/payment/idempotency metadata is accurately disclosed.
@@ -138,15 +200,18 @@ is committed.
 
 ## Verification
 
+Final local verification finished October 17 UTC (October 16 in the owner
+timezone); the requested October 16 report path is retained.
+
 | Check | Current result |
 | --- | --- |
-| Full backend | **449 passed**, 0 failures/skips (13 SDK/Starlette deprecation warnings) |
-| Frontend | **196 passed**, 12 files, 0 failures/skips |
+| Full backend | **479 passed**, 0 failures/skips (13 SDK/Starlette deprecation warnings) |
+| Frontend | **208 passed**, 12 files, 0 failures/skips |
 | Production build | TypeScript, SEO contract and Vite build passed |
 | HTTP routing | **2 passed** (dev and production preview) |
 | Synthetic corpus | **22 statements, 14 families, 372/372 exact rows** |
 | Silent errors / false alarms | **0 / 0** |
-| Browser e2e | **21 passed** in agent-owned Camoufox; **21 passed** in agent-owned Chromium; 5 focused Camoufox follow-up cases passed; 0 current failures/skips |
+| Browser e2e | **29 passed** in agent-owned Chromium and **29 passed** in agent-owned Camoufox; 0 final failures/skips |
 | Workbook calculation | 2 downloaded deposit/card workbooks independently calculated |
 | Source checks | git diff --check; exact device paragraph once; icons/SEO unchanged |
 
@@ -159,23 +224,38 @@ refund/dispute/partial/consumed reversals, cancellation lost responses/startup,
 monotonic holds, restarts/concurrency, preserved packs and legacy mode migration.
 No actual hosted Stripe payment/checkout arrival is claimed.
 
-The actual captured Umami and Cloudflare JavaScript SDKs execute in an
-agent-owned Camoufox browser; all ingestion is intercepted. Umami fetch uses a
-local HTTP transport shim to observe its real serialized body; an unmodified
-external SDK fetch did not dispatch in this browser. Cloudflare's actual network
-bodies include an explicit visibility-lifecycle flush after conversion,
-followed by actual navigation and return-URL exclusion checks. Google uses an
-explicitly mocked command-to-network serializer, not a genuine Google SDK/property.
-Synthetic filename/row/account/statement amount/date/payment-query canaries are
-absent from captured SDK/request bodies, URLs, headers and referrers. Consent,
-revocation/reallow, owner QA, original sensitive referrers, bootstrap failure and
-five-locale controls are tested. This proves local serialization behavior, not
-provider ingestion or real-user acquisition.
+Actual current official Umami, Cloudflare and Google SDK bytes execute with
+all provider collection intercepted. Google's script was obtained from the
+official gtag endpoint with the explicitly synthetic G-SYNTHETIC1 fixture ID;
+this is actual SDK serialization, not a valid-property/ingestion claim. Umami's
+serialized bodies use the existing local HTTP fixture transport because native
+external SDK fetch did not dispatch in Camoufox. Camoufox likewise suppresses
+native Google keepalive collection, so its fixture redirects the actual SDK's
+serialized fetch/beacon payload to local HTTP; no Google command serializer is
+mocked. Chromium uses native intercepted Google transport. CF packets and sampled
+Google /a diagnostics are captured at the browser network boundary. Math.random
+is forced to zero only in the test fixture to exercise sampled diagnostics.
+
+Actual SDK tests prove all five Google mappings, no optional load before consent,
+saved denial/reload, legacy-consent isolation, pending script withdrawal, loaded
+500ms diagnostic-timer disposal, cross-tab clear, owner QA, bootstrap failure and
+all-five-locale choices. Withdrawal timing is measured from BEFORE disposal,
+including exit; the older b23 explicit visibility flush plus subsequent real
+navigation and payload canaries remain. Filename/row/account/amount/date/payment
+query/hash and search-input canaries are absent from serialized SDK bodies, URLs,
+headers and referrers; the account canary is required nonempty. The cookie test
+uses a synthetic HTTPS app subdomain served only from the loopback app, with
+parent-domain/other-property sentinels and actual SDK cookies. The initial Camoufox native-transport event case failed; the HTTPS parent-cookie
+fixture plus local serialized keepalive receipt resolved it, preserving all five
+actual-SDK name/cookie assertions. Both final browser suites pass all 29 cases.
+Fixture traffic
+is not provider acceptance, genuine acquisition or hosted financial testing.
 
 Captured SDK SHA-256 (ignored work artifacts; CI downloads official public SDKs):
 
 - Umami: 1ad1145d19d4558c20f5469ca4a5fc50a1a46f860858c9c91bfcd56fd29a522a
 - Cloudflare: 637381256384554e1cc3309a62fb238a51b83e7f10b2a56d8ba15dbc73ca762e
+- Google: 8f1ca70f4564094099261eb0d201003a4a1c7b988be9c8a05035b4c81282aa47
 
 Browser journeys replay actual upload → subprocess conversion → preview and all
 three reconciliation states → XLSX/CSV/JSON downloads. They cover OCR/password/
@@ -193,7 +273,9 @@ figures. `formulas` 1.3.4 independently evaluates the live workbook references a
 changes status to not_balanced after an amount edit. openpyxl data_only caches are
 blank: these are stored formulas plus independent calculation, **not an Excel
 application recalculation claim**. XLSX/CSV/JSON and screenshots remain ignored
-synthetic work artifacts, under work/playwright-results-20261016-delivery.
+synthetic work artifacts, under work/playwright-20261016-B-chromium-final and
+work/playwright-20261016-B-camoufox-final.
+Independent calculation: work/download-formula-results-20261016-B.json.
 
 The 30-second parsing wall deadline, kill/reap, two-conversion admission, memory
 limits, 20 MiB upload and 100-page cap are unchanged. The full suite verifies
@@ -204,20 +286,27 @@ overdraft, million-unit values and a 40-page statement; page-limit tests reject
 101 pages before extraction. Real-bank accuracy remains unverified. Equation
 balance does not certify every date/description or detect offsetting row errors.
 
-### CI follow-through
+### CI and production-build durability
 
-The first GitHub Chromium run passed 19 cases and exposed two SDK test failures:
-it did not deliver the old page's visibility beacon before navigation destroyed
-that page/route. The test now explicitly exercises the actual SDK's visibility
-handler while its HTTP transport is observable, retains the serialized canary
-assertions, then separately navigates and checks sensitive-return exclusion.
-No payload assertion was removed. The stronger blocked-bootstrap test also
-found a real StrictMode fallback-return loss; a short-lived module-private cache
-preserves initialization without keeping the token in a global or enabling SDKs.
-Frontend now passes 196 tests, affected Camoufox cases pass 5/5, and the full
-agent-owned Chromium suite passes 21/21. Backend and frontend GitHub jobs passed
-on the initial head; updated remote CI is tracked on the PR rather than assumed
-from fixtures. No provider ingestion/payment claim follows from these checks.
+Parent confirmed reviewed b23's actual-head CI green; its earlier Chromium
+visibility failure was already resolved. The StrictMode fallback-return capture
+and lifecycle/canary assertions remain intact. Parent's 8b9 Studio Linux runner
+configuration is preserved. Push now filters to main; pull_request remains, so
+branch updates run one required Linux pipeline rather than duplicate push/PR
+pipelines. No spending/account settings, shared poller or CI framework changed.
+
+Fresh detached tracked clone of 8e0519fd9e120deb7b217c911cad13b86f0a6395
+verified frontend/.env.production is tracked. npm ci used an in-workspace cache
+(the cloud default home cache was unavailable). With both VITE variables explicitly
+unset, nested frontend production build succeeded and contained no synthetic
+identity. Replacing only the clone's file with temporary public fixture identities
+then rebuilding without forwarding put both values into its production bundle.
+The real repository's tracked file remains empty. Two fresh-clone builds passed;
+no configured bundle was published and no provider request was made by this check.
+
+Final local checks precede one consolidated branch push. Final-head Linux CI
+status is recorded on PR8, not inferred from fixtures. Parent owns independent
+review and genuine provider verification.
 
 ### Per-family synthetic corpus
 
@@ -285,7 +374,7 @@ All ten existing layouts remain at 100%; this is synthetic regression coverage.
    Owner resolves a consumed/ambiguous hold only after financial reconciliation;
    no public automated account recovery or cross-device login is provided.
 5. Supply only verified public VITE_GA_MEASUREMENT_ID and
-   VITE_CF_WEB_ANALYTICS_TOKEN at frontend build time. First disable all Google
+   VITE_CF_WEB_ANALYTICS_TOKEN in tracked frontend/.env.production (public only). First disable all Google
    Enhanced Measurement (history/page changes, forms, search, downloads and
    other automatic collection) and Ads/Signals/User-ID features in the actual
    property/stream. Keep the single existing Umami destination. Avoid automatic
@@ -312,12 +401,17 @@ All ten existing layouts remain at 100%; this is synthetic regression coverage.
 Initialization adds mode/customer/subscription/payment/cycle/lot/hold/action
 metadata and checkout reference columns; existing metering/purchase history is
 preserved. A live database cannot import nonempty unbound legacy/test account or
-purchase state. Legacy test purchases lack owned references and need owner
+purchase state. Correction B adds only retained_invoice_id and renewal_stop_at
+columns to stx_subscriptions; it does not rewrite balances or historical decisions.
+Already-processed broken reversals from an earlier binary require owner review;
+do not guess an automatic historical restoration. Legacy test purchases lack owned references and need owner
 reconciliation rather than attribution from account_id metadata. Back up metadata
 before rollout; preserve durable idempotency, consumed history and pending
 cancellations across releases. Do not delete/recreate the ledger or copy test
 allowances into live mode. Roll back only to a build compatible with the mode/
-metadata; the old test-only binary cannot serve live configuration. Removing
+metadata and retained-paid-service behavior; an older build that ignores retained
+invoice service is not a safe financial rollback. The old test-only binary also
+cannot serve live configuration. Removing
 credentials restores the explicitly documented unmetered behavior, so parent
 must treat that as a billing-mode decision, not silently use it as rollback.
 
@@ -325,9 +419,12 @@ must treat that as a billing-mode decision, not silently use it as rollback.
 
 No actual Stripe credentials, hosted TEST payment, unpaid LIVE checkout,
 production webhook/portal setting, GA/CF verified identities or real provider
-arrival was available/performed here. Google SDK delivery and Enhanced Measurement
-settings require parent's actual stream; mocked serialization is not proof of
-those external settings. CF intentionally excludes sensitive entry contexts.
+arrival was available/performed here. Google property settings/acceptance and Enhanced Measurement
+require parent's actual stream; the real SDK fixture audit does not prove those
+external settings. Production CSP, if configured, must permit the same-origin
+frame/helper and the explicitly opted-in Google script/connect destinations; no
+CSP/production setting was changed here. Both optional SDKs intentionally exclude sensitive entry contexts. CF SRI updates
+require another source/payload/withdrawal audit before changing the pin.
 Other site's tracking/configuration and genuine human acquisition were not
 performed: this task is scoped to this repository and forbids unrelated projects,
 outreach, ads and deployment. No fabricated acquisition or ingestion is claimed.
@@ -354,14 +451,20 @@ local suite results above are the evidence recorded here.
 - [Hosted portal](https://docs.stripe.com/customer-management/configure-portal), [portal sessions](https://docs.stripe.com/api/customer_portal/sessions/create)
 - [Umami configuration](https://docs.umami.is/docs/tracker-configuration), [functions](https://docs.umami.is/docs/tracker-functions)
 - [Google consent](https://developers.google.com/tag-platform/security/guides/consent), [privacy](https://developers.google.com/tag-platform/security/guides/privacy), [manual pageviews](https://developers.google.com/analytics/devguides/collection/ga4/views#disable_page_changes_based_on_browser_history_events)
+- [Google valid event names](https://support.google.com/analytics/answer/13316687), [cookie scope](https://developers.google.com/analytics/devguides/collection/ga4/reference/config#cookie_domain), [cookie prefix](https://developers.google.com/tag-platform/security/guides/customize-cookies#rename_cookies)
+- [Checkout expiry](https://docs.stripe.com/api/checkout/sessions/expire), [invoice object](https://docs.stripe.com/api/invoices/object), [dispute object](https://docs.stripe.com/api/disputes/object)
 - [Cloudflare manual beacon](https://developers.cloudflare.com/speed/observatory/rum-beacon/), [SPA behavior](https://developers.cloudflare.com/web-analytics/get-started/web-analytics-spa/)
 
 ## Every changed file
 
+50 files relative to refreshed main:
+
 - `.env.example`
 - `.github/workflows/ci.yml`
+- `.gitignore`
 - `AGENTS.md`
 - `README.md`
+- `WORKLOG.md`
 - `backend/pyproject.toml`
 - `backend/statement_to_excel/api.py`
 - `backend/statement_to_excel/billing.py`
@@ -372,8 +475,10 @@ local suite results above are the evidence recorded here.
 - `backend/tests/test_billing_regression.py`
 - `backend/tests/test_billing_stripe.py`
 - `backend/tests/test_checkout_availability.py`
+- `backend/tests/test_payment_recovery.py`
 - `backend/tests/test_upload_limits.py`
 - `docs/codex-live-billing-2026-10-16.md`
+- `frontend/.env.production`
 - `frontend/deploy/nginx.conf.example`
 - `frontend/e2e/analytics.spec.ts`
 - `frontend/e2e/conversion.spec.ts`
@@ -381,6 +486,8 @@ local suite results above are the evidence recorded here.
 - `frontend/e2e/start-stack.mjs`
 - `frontend/index.html`
 - `frontend/playwright.config.ts`
+- `frontend/public/google-frame.html`
+- `frontend/public/google-frame.js`
 - `frontend/public/privacy-bootstrap.js`
 - `frontend/src/App.test.tsx`
 - `frontend/src/App.tsx`
