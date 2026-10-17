@@ -9,6 +9,7 @@ import {
   fetchCheckoutAvailability,
   fetchCheckoutStatus,
   openCheckout,
+  openPortal,
   type OutputFormat,
 } from "./api";
 
@@ -197,7 +198,7 @@ describe("convertStatement", () => {
     vi.stubGlobal("fetch", fetchMock);
     expect(await fetchAccount("web_test")).toMatchObject({ plan: "free", pro: false });
     await openCheckout("web_test", "starter", "00000000-0000-4000-8000-000000000001");
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/account/web_test");
+    expect(fetchMock.mock.calls[0]).toEqual(["/api/account", expect.objectContaining({ method: "POST", body: JSON.stringify({ account_id: "web_test" }) })]);
     const init = fetchMock.mock.calls[1][1] as RequestInit;
     expect(init.headers).toEqual({ "Content-Type": "application/json", "Idempotency-Key": "00000000-0000-4000-8000-000000000001" });
     expect(JSON.parse(init.body as string)).toEqual({ account_id: "web_test", sku: "starter" });
@@ -218,7 +219,7 @@ describe("convertStatement", () => {
     const fetchMock = vi.fn().mockResolvedValue(fakeResponse(200, { session_id: "cs_test_1", sku: "pack_50", status: "fulfilled" }));
     vi.stubGlobal("fetch", fetchMock);
     expect(await fetchCheckoutStatus("web_test", "cs_test_1")).toMatchObject({ status: "fulfilled" });
-    expect(fetchMock).toHaveBeenCalledWith("/api/checkout/cs_test_1?account_id=web_test");
+    expect(fetchMock).toHaveBeenCalledWith("/api/checkout/status", expect.objectContaining({ method: "POST", body: JSON.stringify({ account_id: "web_test", session_id: "cs_test_1" }) }));
   });
 
   it.each([
@@ -267,5 +268,20 @@ describe("convertStatement", () => {
     }).catch((e) => e as ApiError);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).kind).toBe("parse");
+  });
+});
+
+
+describe("hosted management API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("sends only the account capability in a private POST body", async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ portal_url: "https://billing.stripe.com/synthetic" }) });
+    vi.stubGlobal("fetch", send);
+    expect(await openPortal("web_private_capability")).toBe("https://billing.stripe.com/synthetic");
+    expect(send).toHaveBeenCalledWith("/api/billing/portal", expect.objectContaining({ method: "POST", body: JSON.stringify({ account_id: "web_private_capability" }) }));
+  });
+  it("rejects a foreign hosted management URL", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ portal_url: "https://foreign.example/" }) }));
+    await expect(openPortal("web_private_capability")).rejects.toThrow("Invalid payment management URL");
   });
 });

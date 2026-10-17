@@ -548,3 +548,7 @@ tbody tr:hover {
     overflow-wrap: anywhere;
   }
 }
+.billing-notice, .manage-payment { margin: 1rem auto; display: block; text-align: center; }
+.privacy-controls { max-width: 65ch; margin: 1rem auto; text-align: start; }
+.privacy-controls summary { cursor: pointer; }
+.privacy-controls p { line-height: 1.6; }

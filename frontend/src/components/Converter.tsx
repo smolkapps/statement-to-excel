@@ -87,7 +87,9 @@ export function Converter({ accountId, onCharged }: Props) {
       }
     } catch (err) {
       track("convert-error");
-      if (err instanceof ApiError && err.kind === "insufficient") {
+      if (err instanceof ApiError && err.kind === "billing_hold") {
+        setError(t.billing_hold);
+      } else if (err instanceof ApiError && err.kind === "insufficient") {
         setError(t.convert_error_insufficient);
       } else if (err instanceof ApiError && err.status === 504) {
         setError(t.convert_error_timeout);

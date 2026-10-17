@@ -63,6 +63,8 @@ export async function startBackend({ checkoutConfigured = false } = {}) {
       // Stripe credentials; browser checkout requests are intercepted in tests.
       env: {
         STX_BILLING_PROVIDER: "stripe",
+        STX_STRIPE_MODE: "test",
+        STX_STRIPE_PORTAL_CONFIGURATION: checkoutConfigured ? "bpc_SYNTHETIC" : "",
         STX_BILLING_DATABASE: resolve(directory, "billing.sqlite3"),
         STX_STRIPE_SECRET_KEY: checkoutConfigured ? "sk_test_SYNTHETIC_BROWSER_NOT_A_STRIPE_KEY" : "",
         STX_STRIPE_WEBHOOK_SECRET: checkoutConfigured ? "whsec_SYNTHETIC_BROWSER_NOT_A_STRIPE_SECRET" : "",
@@ -78,10 +80,10 @@ export async function startBackend({ checkoutConfigured = false } = {}) {
   }
 }
 
-export async function startVite({ mode = "preview", target, port: requestedPort }) {
+export async function startVite({ mode = "preview", target, port: requestedPort, analyticsTest = false }) {
   const port = requestedPort ?? await freePort();
   const args = [resolve(frontendRoot, "node_modules/vite/bin/vite.js")];
   if (mode === "preview") args.push("preview");
   args.push("--host", "127.0.0.1", "--port", String(port), "--strictPort");
-  return launch(process.execPath, args, { cwd: frontendRoot, env: { STX_API_TARGET: target }, port });
+  return launch(process.execPath, args, { cwd: frontendRoot, env: { STX_API_TARGET: target, ...(analyticsTest ? { VITE_GA_MEASUREMENT_ID: "G-SYNTHETIC1", VITE_CF_WEB_ANALYTICS_TOKEN: "0123456789abcdef0123456789abcdef" } : {}) }, port });
 }

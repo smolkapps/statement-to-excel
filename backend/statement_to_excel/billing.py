@@ -1,22 +1,19 @@
-"""Page metering and durable Stripe TEST Checkout. Never stores statements.
+"""Page metering and durable app-owned Stripe billing. Never stores statements.
 
 Purchases are granted only by verified Stripe webhooks. Checkout request keys,
 provider sessions, account allowances, and entitlement grants persist in SQLite;
 a grant and its deduplication marker commit in the same database transaction.
 Production must mount STX_BILLING_DATABASE on durable shared storage (single host).
-Live Stripe keys are deliberately rejected until Michael approves a future change.
+Explicit test/live modes use separate mode-bound durable databases.
 """
 
 from __future__ import annotations
 
-import os
-import hashlib
 import json
 import sqlite3
 import time
 from contextlib import closing, contextmanager
 from pathlib import Path
-from urllib.parse import urlparse
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -126,6 +123,7 @@ class Account:
     credits: int = 0  # prepaid credit balance
     pages_used_this_cycle: int = 0
     pro: bool = False
+    billing_hold: bool = False
 
     @property
     def plan(self) -> Plan:
@@ -149,7 +147,7 @@ class Account:
             "from_included": from_included,
             "from_credits": from_credits,
             "credits_after": self.credits - from_credits,
-            "sufficient": from_credits <= self.credits,
+            "sufficient": from_credits <= self.credits and not self.billing_hold,
         }
 
 
@@ -273,8 +271,9 @@ class BillingError(Exception):
 class PersistentLedger(Ledger):
     """SQLite metadata only; no uploaded bytes, filenames or transaction rows."""
 
-    def __init__(self, database_path: str):
+    def __init__(self, database_path: str, mode: str = "test"):
         super().__init__()
+        self.mode = mode
         self.database_path = database_path
         Path(database_path).parent.mkdir(parents=True, exist_ok=True)
         with closing(self.connect()) as db:
@@ -314,6 +313,49 @@ class PersistentLedger(Ledger):
                     fingerprint TEXT NOT NULL, charge TEXT NOT NULL,
                     created_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS stx_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS stx_customers (
+                    account_id TEXT NOT NULL, mode TEXT NOT NULL,
+                    binding_ref TEXT NOT NULL UNIQUE, customer_id TEXT UNIQUE,
+                    attempted_at REAL NOT NULL, PRIMARY KEY(account_id,mode)
+                );
+                CREATE TABLE IF NOT EXISTS stx_subscriptions (
+                    subscription_id TEXT PRIMARY KEY, purchase_ref TEXT NOT NULL UNIQUE,
+                    account_id TEXT NOT NULL, customer_id TEXT NOT NULL, mode TEXT NOT NULL,
+                    sku TEXT NOT NULL, paid_through INTEGER NOT NULL DEFAULT 0,
+                    cycle_start INTEGER NOT NULL DEFAULT 0,
+                    terminal INTEGER NOT NULL DEFAULT 0, blocked INTEGER NOT NULL DEFAULT 0,
+                    cancel_at_period_end INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'incomplete'
+                );
+                CREATE TABLE IF NOT EXISTS stx_payments (
+                    payment_intent TEXT PRIMARY KEY, purchase_ref TEXT NOT NULL,
+                    customer_id TEXT NOT NULL, mode TEXT NOT NULL, amount INTEGER NOT NULL,
+                    charge_id TEXT UNIQUE, invoice_id TEXT, subscription_id TEXT,
+                    reversed INTEGER NOT NULL DEFAULT 0, disputed INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS stx_cycles (
+                    invoice_id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL,
+                    period_start INTEGER NOT NULL, period_end INTEGER NOT NULL,
+                    amount INTEGER NOT NULL, used_pages INTEGER NOT NULL DEFAULT 0,
+                    reversed INTEGER NOT NULL DEFAULT 0,
+                    granted INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(subscription_id,period_start)
+                );
+                CREATE TABLE IF NOT EXISTS stx_credit_lots (
+                    purchase_ref TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+                    granted INTEGER NOT NULL, remaining INTEGER NOT NULL,
+                    consumed INTEGER NOT NULL DEFAULT 0, revoked INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS stx_holds (
+                    purchase_ref TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+                    reason TEXT NOT NULL, resolved INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS stx_actions (
+                    subscription_id TEXT PRIMARY KEY, purchase_ref TEXT NOT NULL,
+                    mode TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt REAL NOT NULL DEFAULT 0,
+                    complete INTEGER NOT NULL DEFAULT 0, last_error TEXT
+                );
             """)
             # Local metadata schemas are forwards compatible across deploys.
             columns = {row['name'] for row in db.execute("PRAGMA table_info(checkout_requests)")}
@@ -330,6 +372,24 @@ class PersistentLedger(Ledger):
                     db.execute("ALTER TABLE conversion_charges ADD COLUMN created_at REAL")
                 db.execute("DELETE FROM conversion_charges WHERE created_at IS NULL")
                 db.execute("CREATE INDEX IF NOT EXISTS conversion_charges_created_at ON conversion_charges(created_at)")
+                columns = {row['name'] for row in db.execute("PRAGMA table_info(checkout_requests)")}
+                for name, definition in (("app", "TEXT"), ("mode", "TEXT"),
+                                         ("purchase_ref", "TEXT"), ("customer_id", "TEXT")):
+                    if name not in columns:
+                        db.execute(f"ALTER TABLE checkout_requests ADD COLUMN {name} {definition}")
+                db.execute("CREATE UNIQUE INDEX IF NOT EXISTS stx_purchase_ref ON checkout_requests(purchase_ref)")
+                if 'granted' not in {row['name'] for row in db.execute('PRAGMA table_info(stx_cycles)')}:
+                    db.execute('ALTER TABLE stx_cycles ADD COLUMN granted INTEGER NOT NULL DEFAULT 0')
+                if 'retained_invoice_id' not in {row['name'] for row in db.execute('PRAGMA table_info(stx_subscriptions)')}:
+                    db.execute('ALTER TABLE stx_subscriptions ADD COLUMN retained_invoice_id TEXT')
+                if 'renewal_stop_at' not in {row['name'] for row in db.execute('PRAGMA table_info(stx_subscriptions)')}:
+                    db.execute('ALTER TABLE stx_subscriptions ADD COLUMN renewal_stop_at INTEGER')
+                prior = db.execute("SELECT value FROM stx_settings WHERE key='billing_mode'").fetchone()
+                legacy = any(db.execute(f'SELECT 1 FROM {table} LIMIT 1').fetchone()
+                             for table in ('accounts', 'checkout_requests', 'entitlements', 'subscription_state'))
+                if mode not in {'test', 'live'} or prior and prior['value'] != mode or not prior and legacy and mode != 'test':
+                    raise RuntimeError("Billing database mode conflicts with configured mode; use separate test/live databases.")
+                db.execute("INSERT OR IGNORE INTO stx_settings VALUES ('billing_mode',?)", (mode,))
                 db.commit()
             except BaseException:
                 db.rollback()
@@ -358,10 +418,21 @@ class PersistentLedger(Ledger):
     def ensure_account(db, account_id):
         db.execute("INSERT OR IGNORE INTO accounts(id) VALUES (?)", (account_id,))
 
-    @staticmethod
-    def read_account(db, account_id):
+    def read_account(self, db, account_id):
+        from .payments import refresh_account_access
+        refresh_account_access(db, account_id)
         row = db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
-        return Account(row['id'], row['plan_id'], row['credits'], row['pages_used'], bool(row['pro']))
+        held = db.execute("SELECT 1 FROM stx_holds WHERE account_id=? AND resolved=0", (account_id,)).fetchone()
+        return Account(row['id'], row['plan_id'], row['credits'], row['pages_used'], bool(row['pro']), bool(held))
+
+    def require_mode(self, mode):
+        if mode != self.mode:
+            raise BillingError("Billing mode does not match this database.")
+
+    @staticmethod
+    def record_spend(db, account_id, included, credits):
+        from .payments import record_spend
+        record_spend(db, account_id, included, credits)
 
     def get_or_create(self, account_id):
         with self.transaction() as db:
@@ -372,6 +443,10 @@ class PersistentLedger(Ledger):
         with self.transaction() as db:
             found = db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone()
             return self.read_account(db, account_id) if found else Account(id=account_id)
+
+    def has_customer(self, account_id):
+        with self.transaction() as db:
+            return bool(db.execute("SELECT 1 FROM stx_customers WHERE account_id=? AND mode=? AND customer_id IS NOT NULL", (account_id, self.mode)).fetchone())
 
     def set_plan(self, account_id, plan_id):
         if plan_id not in PLANS:
@@ -399,6 +474,7 @@ class PersistentLedger(Ledger):
             if not quote['sufficient']:
                 raise InsufficientCredits("insufficient credits")
             db.execute("UPDATE accounts SET pages_used=pages_used+?,credits=credits-? WHERE id=?", (quote['from_included'], quote['from_credits'], account_id))
+            self.record_spend(db, account_id, quote['from_included'], quote['from_credits'])
             return dict(account=account_id, kind='charge', pages=pages,
                         from_included=quote['from_included'], from_credits=quote['from_credits'],
                         credits_after=quote['credits_after'])
@@ -451,6 +527,7 @@ class PersistentLedger(Ledger):
                 if not quote['sufficient']:
                     raise InsufficientCredits("insufficient credits")
                 db.execute("UPDATE accounts SET pages_used=pages_used+?,credits=credits-? WHERE id=?", (quote['from_included'], quote['from_credits'], account_id))
+                self.record_spend(db, account_id, quote['from_included'], quote['from_credits'])
                 charge = dict(account=account_id, kind='charge', pages=pages,
                               from_included=quote['from_included'], from_credits=quote['from_credits'], credits_after=quote['credits_after'])
                 db.execute("INSERT INTO conversion_charges(request_key,account_id,fingerprint,charge,created_at) VALUES (?,?,?,?,?)", (key, account_id, fingerprint, json.dumps(charge), time.time()))
@@ -471,73 +548,6 @@ class BillingProvider:
 
     def verify_event(self, payload, signature):
         raise NotImplementedError
-
-
-class StripeBillingProvider(BillingProvider):
-    name = "stripe"
-
-    def __init__(self, secret_key=None, webhook_secret=None, origin=None):
-        self.secret_key = secret_key if secret_key is not None else os.getenv("STX_STRIPE_SECRET_KEY", "")
-        self.webhook_secret = webhook_secret if webhook_secret is not None else os.getenv("STX_STRIPE_WEBHOOK_SECRET", "")
-        self.origin = (origin or os.getenv("STX_CHECKOUT_ORIGIN", "http://localhost:5173")).rstrip('/')
-        # There is no environment-variable bypass for live charges.
-        if self.secret_key and not self.secret_key.startswith("sk_test_"):
-            raise RuntimeError("Only Stripe sk_test_ keys are permitted; Michael must approve live charges.")
-        parsed = urlparse(self.origin)
-        if parsed.scheme not in {'https', 'http'} or not parsed.netloc or parsed.query or parsed.fragment or parsed.path not in {'', '/'}:
-            raise RuntimeError("STX_CHECKOUT_ORIGIN must be an origin without a path.")
-        if parsed.scheme == 'http' and parsed.hostname not in {'localhost', '127.0.0.1'}:
-            raise RuntimeError("Checkout return origin must use HTTPS except localhost.")
-
-    @property
-    def checkout_available(self) -> bool:
-        """One source of truth for configured Stripe TEST checkout and metering."""
-        return self.secret_key.startswith('sk_test_') and self.webhook_secret.startswith('whsec_')
-
-    def check_configuration(self):
-        if not self.checkout_available:
-            raise BillingError("Checkout is unavailable until Stripe test credentials and webhook are configured.")
-
-    def create_checkout(self, account_id, sku, idempotency_key):
-        self.check_configuration()
-        if sku == 'free' or sku not in CREDIT_PACKS and sku not in PLANS:
-            raise BillingError("Unknown paid product.", 400)
-        import stripe
-        if sku in CREDIT_PACKS:
-            product = CREDIT_PACKS[sku]
-            price = product.price_usd
-            mode = 'payment'
-        else:
-            product = PLANS[sku]
-            price = product.monthly_price_usd
-            mode = 'subscription'
-        price_data = {'currency': 'usd', 'unit_amount': int(price * 100),
-                      'product_data': {'name': product.name}}
-        if mode == 'subscription':
-            price_data['recurring'] = {'interval': 'month'}
-        try:
-            session = stripe.checkout.Session.create(
-                api_key=self.secret_key, idempotency_key=idempotency_key,
-                mode=mode, payment_method_types=['card'],
-                line_items=[{'price_data': price_data, 'quantity': 1}],
-                client_reference_id=account_id,
-                metadata={'account_id': account_id, 'sku': sku, 'purchase_key': idempotency_key},
-                success_url=self.origin + '/?checkout=success&session_id={CHECKOUT_SESSION_ID}',
-                cancel_url=self.origin + '/?checkout=cancelled',
-            )
-        except stripe.StripeError as exc:
-            raise BillingError("Checkout could not be opened. Retry this same purchase.") from exc
-        return {'session_id': session['id'], 'checkout_url': session['url'],
-                'provider': self.name, 'mode': 'test'}
-
-    def verify_event(self, payload, signature):
-        if not self.webhook_secret.startswith('whsec_'):
-            raise BillingError("Stripe webhook is not configured.")
-        import stripe
-        try:
-            return stripe.Webhook.construct_event(payload, signature, self.webhook_secret, tolerance=300)
-        except (ValueError, stripe.SignatureVerificationError) as exc:
-            raise BillingError("Invalid webhook signature.", 400) from exc
 
 
 class MockBillingProvider(BillingProvider):
@@ -572,168 +582,7 @@ class MockBillingProvider(BillingProvider):
         return ledger.set_plan(intent['account_id'], intent['sku'])
 
 
-def create_checkout(ledger, provider, account_id, sku, request_key):
-    """Reserve a durable request before touching Stripe; retry its original key.
 
-    Stripe retains keys at least 24 hours. An ambiguous request older than 23
-    hours fails closed for owner reconciliation, rather than risking a second
-    payment after Stripe's key retention window.
-    """
-    if not request_key or len(request_key) < 16 or len(request_key) > 200:
-        raise BillingError("A stable Idempotency-Key of 16-200 characters is required.", 400)
-    if sku == 'free' or sku not in CREDIT_PACKS and sku not in PLANS:
-        raise BillingError("Unknown paid product.", 400)
-    # A deterministic local configuration error cannot have reached Stripe;
-    # do not leave a pending purchase that prevents choosing another plan.
-    preflight = getattr(provider, 'check_configuration', None)
-    if preflight:
-        preflight()
-    if not isinstance(ledger, PersistentLedger):
-        # Compatibility for the explicitly injected pure unit-test ledger.
-        return provider.create_checkout(account_id, sku, request_key)
-    with ledger.transaction() as db:
-        row = db.execute("SELECT * FROM checkout_requests WHERE request_key=?", (request_key,)).fetchone()
-        alias = db.execute("SELECT * FROM checkout_aliases WHERE request_key=?", (request_key,)).fetchone()
-        if alias:
-            if (alias['account_id'], alias['sku']) != (account_id, sku):
-                raise BillingError("Idempotency key already belongs to another purchase.", 409)
-            row = db.execute("SELECT * FROM checkout_requests WHERE request_key=?", (alias['canonical_key'],)).fetchone()
-        if row and (row['account_id'], row['sku']) != (account_id, sku):
-            raise BillingError("Idempotency key already belongs to another purchase.", 409)
-        if not row:
-            # An active subscription must never be purchased twice.
-            if sku in PLANS:
-                active = db.execute("SELECT 1 FROM checkout_requests WHERE account_id=? AND subscription_id IS NOT NULL AND state='fulfilled'", (account_id,)).fetchone()
-                if active:
-                    raise BillingError("A subscription is already active; contact the owner to change plans.", 409)
-                pending = db.execute("SELECT sku FROM checkout_requests WHERE account_id=? AND state='pending' AND sku IN ('starter','business','firm')", (account_id,)).fetchone()
-                if pending and pending['sku'] != sku:
-                    raise BillingError("Another plan checkout is pending; finish it or wait for it to expire before changing plans.", 409)
-            row = db.execute("SELECT * FROM checkout_requests WHERE account_id=? AND sku=? AND state='pending' ORDER BY attempted_at LIMIT 1", (account_id, sku)).fetchone()
-            if row:
-                db.execute("INSERT INTO checkout_aliases VALUES (?,?,?,?)", (request_key, row['request_key'], account_id, sku))
-            else:
-                provider_key = 'stx-' + hashlib.sha256(request_key.encode()).hexdigest()
-                db.execute("INSERT INTO checkout_requests(request_key,account_id,sku,attempted_at,provider_key) VALUES (?,?,?,?,?)", (request_key, account_id, sku, time.time(), provider_key))
-    # Separate transaction preserves the reservation if a network failure rolls back.
-    with ledger.transaction() as db:
-        alias = db.execute("SELECT canonical_key FROM checkout_aliases WHERE request_key=?", (request_key,)).fetchone()
-        canonical = alias['canonical_key'] if alias else request_key
-        row = db.execute("SELECT * FROM checkout_requests WHERE request_key=?", (canonical,)).fetchone()
-        if row['state'] == 'expired':
-            raise BillingError("This checkout expired; start a new purchase.", 409)
-        if row['state'] in {'fulfilled', 'cancelled'} and not row['response']:
-            raise BillingError("This purchase is already completed; refresh its status.", 409)
-        if row['response']:
-            return json.loads(row['response'])
-        if time.time() - row['attempted_at'] > 23 * 60 * 60:
-            raise BillingError("Payment status is uncertain; owner reconciliation is required before retrying.", 409)
-        stripe_key = row['provider_key'] or 'stx-' + hashlib.sha256(canonical.encode()).hexdigest()
-        db.execute("UPDATE checkout_requests SET provider_key=? WHERE request_key=?", (stripe_key, canonical))
-        response = provider.create_checkout(account_id, sku, stripe_key)
-        if not response.get('session_id') or not response.get('checkout_url'):
-            raise BillingError("Payment provider returned an incomplete checkout.")
-        db.execute("UPDATE checkout_requests SET session_id=?,response=? WHERE request_key=?", (response['session_id'], json.dumps(response), canonical))
-        return response
-
-
-def checkout_status(ledger, session_id, account_id):
-    if not isinstance(ledger, PersistentLedger):
-        raise BillingError("Durable billing storage is required.")
-    with ledger.transaction() as db:
-        row = db.execute("SELECT * FROM checkout_requests WHERE session_id=? AND account_id=?", (session_id, account_id)).fetchone()
-        if not row:
-            raise BillingError("Checkout was not found for this account.", 404)
-        return {'session_id': session_id, 'sku': row['sku'], 'status': row['state']}
-
-
-def apply_webhook(ledger, event):
-    """Exactly-once grant, atomic with its marker, based on paid signed events."""
-    if not isinstance(ledger, PersistentLedger):
-        raise BillingError("Durable billing storage is required.")
-    if event.get('livemode') is not False:
-        raise BillingError("Live payment events are not permitted.", 400)
-    event_id = event.get('id')
-    if not event_id:
-        raise BillingError("Webhook event id is required.", 400)
-    session = event.get('data', {}).get('object', {})
-    kind = event.get('type')
-    with ledger.transaction() as db:
-        if db.execute("SELECT 1 FROM webhook_events WHERE event_id=?", (event_id,)).fetchone():
-            return {'received': True, 'granted': False}
-        granted = False
-        if kind in {'checkout.session.completed', 'checkout.session.async_payment_succeeded'}:
-            if session.get('payment_status') != 'paid' or session.get('livemode') is not False:
-                # Never grant on a redirect, failed request, unpaid session or live event.
-                return {'received': True, 'granted': False}
-            row = db.execute("SELECT * FROM checkout_requests WHERE session_id=?", (session.get('id'),)).fetchone()
-            metadata = session.get('metadata') or {}
-            if not row:
-                # A signed event can recover a session created before API failure.
-                row = db.execute("SELECT * FROM checkout_requests WHERE provider_key=?", (metadata.get('purchase_key'),)).fetchone()
-                if not row or row['session_id']:
-                    raise BillingError("Checkout session is not recorded or conflicts with its purchase.")
-            if (metadata.get('account_id'), metadata.get('sku')) != (row['account_id'], row['sku']):
-                raise BillingError("Checkout metadata does not match its purchase.", 400)
-            expected_mode = 'payment' if row['sku'] in CREDIT_PACKS else 'subscription'
-            if session.get('mode') != expected_mode or (expected_mode == 'subscription' and not session.get('subscription')):
-                raise BillingError("Checkout mode does not match its purchase.", 400)
-            price = CREDIT_PACKS[row['sku']].price_usd if expected_mode == 'payment' else PLANS[row['sku']].monthly_price_usd
-            if session.get('currency') != 'usd' or session.get('amount_total') != int(price * 100):
-                raise BillingError("Paid amount does not match the configured product.", 400)
-            session_id = session.get('id')
-            if not session_id:
-                raise BillingError("Checkout session id is required.", 400)
-            db.execute("UPDATE checkout_requests SET session_id=? WHERE request_key=?", (session_id, row['request_key']))
-            sub = session.get('subscription')
-            prior_sub = db.execute("SELECT * FROM subscription_state WHERE subscription_id=?", (sub,)).fetchone() if sub else None
-            if prior_sub and prior_sub['cancelled']:
-                db.execute("UPDATE checkout_requests SET state='cancelled',subscription_id=? WHERE request_key=?", (sub, row['request_key']))
-                db.execute("INSERT INTO webhook_events VALUES (?)", (event_id,))
-                return {'received': True, 'granted': False}
-            inserted = db.execute("INSERT OR IGNORE INTO entitlements VALUES (?,?,?)", (session_id, row['account_id'], row['sku'])).rowcount
-            if inserted:
-                ledger.ensure_account(db, row['account_id'])
-                if row['sku'] in CREDIT_PACKS:
-                    db.execute("UPDATE accounts SET credits=credits+?,pro=1 WHERE id=?", (CREDIT_PACKS[row['sku']].credits, row['account_id']))
-                else:
-                    db.execute("UPDATE accounts SET plan_id=?,pro=1,pages_used=0 WHERE id=?", (row['sku'], row['account_id']))
-                cycle = prior_sub['cycle_start'] if prior_sub else 0
-                db.execute("UPDATE checkout_requests SET state='fulfilled',subscription_id=?,cycle_start=? WHERE session_id=?", (sub, cycle, session_id))
-                granted = True
-        elif kind == 'checkout.session.expired':
-            row = db.execute("SELECT * FROM checkout_requests WHERE session_id=?", (session.get('id'),)).fetchone()
-            metadata = session.get('metadata') or {}
-            if not row and metadata.get('purchase_key'):
-                row = db.execute("SELECT * FROM checkout_requests WHERE provider_key=?", (metadata['purchase_key'],)).fetchone()
-                if row and not row['session_id'] and (metadata.get('account_id'), metadata.get('sku')) == (row['account_id'], row['sku']):
-                    db.execute("UPDATE checkout_requests SET session_id=? WHERE request_key=?", (session.get('id'), row['request_key']))
-            db.execute("UPDATE checkout_requests SET state='expired' WHERE session_id=? AND state='pending'", (session.get('id'),))
-        elif kind == 'customer.subscription.deleted':
-            if not session.get('id'):
-                raise BillingError("Subscription id is required.", 400)
-            db.execute("INSERT INTO subscription_state(subscription_id,cancelled) VALUES (?,1) ON CONFLICT(subscription_id) DO UPDATE SET cancelled=1", (session['id'],))
-            row = db.execute("SELECT * FROM checkout_requests WHERE subscription_id=? AND state='fulfilled'", (session.get('id'),)).fetchone()
-            if row:
-                db.execute("UPDATE checkout_requests SET state='cancelled' WHERE subscription_id=?", (session['id'],))
-                packs = db.execute("SELECT 1 FROM entitlements WHERE account_id=? AND sku IN ('pack_50','pack_200','pack_1000')", (row['account_id'],)).fetchone()
-                db.execute("UPDATE accounts SET plan_id='free',pro=?,pages_used=3 WHERE id=?", (int(bool(packs)), row['account_id']))
-        elif kind == 'invoice.paid':
-            # Stripe v2025 nests subscription under parent; older versions expose it directly.
-            subscription = session.get('subscription') or session.get('parent', {}).get('subscription_details', {}).get('subscription')
-            row = db.execute("SELECT * FROM checkout_requests WHERE subscription_id=? AND state='fulfilled'", (subscription,)).fetchone()
-            period = session.get('period_start', 0)
-            if subscription and session.get('billing_reason') == 'subscription_cycle':
-                db.execute("INSERT INTO subscription_state(subscription_id,cycle_start) VALUES (?,?) ON CONFLICT(subscription_id) DO UPDATE SET cycle_start=max(cycle_start,excluded.cycle_start)", (subscription, period))
-            if row and session.get('billing_reason') == 'subscription_cycle' and period > row['cycle_start']:
-                db.execute("UPDATE accounts SET pages_used=0 WHERE id=?", (row['account_id'],))
-                db.execute("UPDATE checkout_requests SET cycle_start=? WHERE session_id=?", (period, row['session_id']))
-        db.execute("INSERT INTO webhook_events VALUES (?)", (event_id,))
-        return {'received': True, 'granted': granted}
-
-
-def get_provider():
-    name = os.getenv('STX_BILLING_PROVIDER', 'stripe').lower()
-    if name != 'stripe':
-        raise RuntimeError("Only Stripe test billing is supported; mock is a unit-test double.")
-    return StripeBillingProvider()
+# Re-export the public API while keeping document metering independent of Stripe.
+from .payments import (StripeBillingProvider, create_checkout, checkout_status,
+                       apply_webhook, create_portal, get_provider)

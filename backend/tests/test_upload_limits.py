@@ -70,6 +70,7 @@ def conversion_client(request, monkeypatch, tmp_path):
     provider = StripeBillingProvider(
         secret_key="sk_test_synthetic_not_a_credential" if metered else "",
         webhook_secret="whsec_synthetic_not_a_credential" if metered else "",
+        portal_configuration="bpc_synthetic" if metered else "",
     )
     monkeypatch.setattr(api, "PROVIDER", provider)
     # Neither mode in these tests is permitted to open an external checkout.

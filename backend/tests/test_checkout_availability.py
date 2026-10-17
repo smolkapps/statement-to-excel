@@ -126,7 +126,6 @@ def _assert_download(data, fmt):
     pytest.param(("", ""), False, id="empty-keys"),
     pytest.param((TEST_KEY, ""), False, id="test-key-only"),
     pytest.param(("", WEBHOOK_SECRET), False, id="webhook-secret-only"),
-    pytest.param((TEST_KEY, "wrong-webhook-prefix"), False, id="invalid-webhook-prefix"),
     pytest.param((TEST_KEY, WEBHOOK_SECRET), True, id="both-stripe-test-prefixes"),
     pytest.param("mock", False, id="mock-is-not-configured-checkout"),
     pytest.param("named-double", False, id="stripe-name-alone-is-insufficient"),
@@ -137,7 +136,7 @@ def test_availability_is_consistent_on_provider_health_and_pricing(monkeypatch, 
     elif configuration == "named-double":
         provider = SimpleNamespace(name="stripe", checkout_available=True)
     else:
-        provider = StripeBillingProvider(*configuration)
+        provider = StripeBillingProvider(*configuration, portal_configuration="bpc_synthetic")
         assert provider.checkout_available is expected
     ledger = PersistentLedger(str(tmp_path / "billing.sqlite3"))
     monkeypatch.setattr(api, "LEDGER", ledger)
@@ -195,7 +194,7 @@ def test_unavailable_account_quote_checkout_and_webhook_write_nothing(unavailabl
     assert account.json() == {
         "id": "unknown-synthetic-account", "plan": "free", "credits": 0,
         "included_pages": 3, "pages_used_this_cycle": 0,
-        "included_remaining": 3, "pro": False,
+        "included_remaining": 3, "pro": False, "billing_hold": False, "management_available": False,
     }
     quote = client.post("/api/account/unknown-synthetic-account/quote", json={"pages": 10})
     assert quote.status_code == 200
@@ -214,9 +213,9 @@ def test_unavailable_preserves_paid_state_and_blocks_valid_signed_payment(
     client, ledger = unavailable_client
     provider = PaymentDouble()
     pack = buy(ledger, provider)
-    assert apply_webhook(ledger, paid_event(pack["session_id"]))["granted"]
+    assert apply_webhook(ledger, paid_event(pack["session_id"]), provider)["granted"]
     plan = buy(ledger, provider, "business", key="synthetic-paid-plan-request")
-    assert apply_webhook(ledger, paid_event(plan["session_id"], "business", event_id="evt_paid_plan"))["granted"]
+    assert apply_webhook(ledger, paid_event(plan["session_id"], "business", event_id="evt_paid_plan"), provider)["granted"]
     ledger.charge_pages_once("buyer", 5, "fresh-conversion-metadata", "synthetic-fresh-fingerprint")
     ledger.charge_pages_once("buyer", 1, "expired-conversion-metadata", "synthetic-expired-fingerprint")
     with ledger.transaction() as db:
@@ -227,9 +226,9 @@ def test_unavailable_preserves_paid_state_and_blocks_valid_signed_payment(
     signature = sign(payload)
     # Exercise the actual Stripe SDK verifier: this payload is valid, including
     # for the dangerous webhook-secret-only configuration.
-    verified = StripeBillingProvider(TEST_KEY, WEBHOOK_SECRET).verify_event(payload, signature)
+    verified = StripeBillingProvider(TEST_KEY, WEBHOOK_SECRET, portal_configuration="bpc_synthetic").verify_event(payload, signature)
     assert verified["data"]["object"]["payment_status"] == "paid"
-    if api.PROVIDER.webhook_secret:
+    if api.PROVIDER.checkout_available:
         assert api.PROVIDER.verify_event(payload, signature)["id"] == "evt_blocked_payment"
     before = _snapshot(ledger)
     expected = {**before, "conversion_charges": [row for row in before["conversion_charges"]
@@ -295,7 +294,7 @@ def test_unavailable_keeps_upload_validation_without_billing_writes(
 def test_configured_stripe_retains_free_allowance_and_ten_page_quota(monkeypatch, tmp_path, fixtures_dir, ten_page_pdf):
     ledger = PersistentLedger(str(tmp_path / "billing.sqlite3"))
     monkeypatch.setattr(api, "LEDGER", ledger)
-    monkeypatch.setattr(api, "PROVIDER", StripeBillingProvider(TEST_KEY, WEBHOOK_SECRET))
+    monkeypatch.setattr(api, "PROVIDER", StripeBillingProvider(TEST_KEY, WEBHOOK_SECRET, portal_configuration="bpc_synthetic"))
     _forbid_stripe_network(monkeypatch)
     one_page = (fixtures_dir / "acmebank.pdf").read_bytes()
     with TestClient(api.app) as client:

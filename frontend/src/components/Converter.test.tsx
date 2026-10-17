@@ -342,3 +342,12 @@ describe("Converter", () => {
     expect(screen.getByText("Synthetic transaction 60").closest("tr")).toHaveTextContent(LOCALES.en.row_flag_multiline_description);
   });
 });
+
+it.each(LOCALE_ORDER)('shows owner reconciliation guidance for a payment hold in %s', async (locale) => {
+  convertStatement.mockRejectedValue(new ApiError('billing_hold', 'Never display provider internals', 409));
+  renderConverter({ accountId: 'web_synthetic' }, locale);
+  fireEvent.change(document.querySelector<HTMLInputElement>('input[type=file]')!, { target: { files: [new File(['synthetic'], 'synthetic.pdf', { type: 'application/pdf' })] } });
+  fireEvent.click(screen.getByRole('button', { name: LOCALES[locale].convert_button }));
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(LOCALES[locale].billing_hold));
+  expect(screen.queryByText('Never display provider internals')).not.toBeInTheDocument();
+});

@@ -68,6 +68,50 @@ describe("server-authoritative checkout", () => {
     expect(localStorage.getItem("stx_account_id")).toMatch(/^web_[0-9a-f-]{36}$/);
   });
 
+  it.each(LOCALE_ORDER)("shows hosted management and billing disclosure in %s", async (locale) => {
+    fetchAccount.mockResolvedValue({ ...freeAccount, plan: "starter", pro: true, management_available: true });
+    await renderApp(locale);
+    await waitFor(() => expect(screen.getByRole("button", { name: LOCALES[locale].billing_manage })).toBeInTheDocument());
+    expect(screen.getByText(LOCALES[locale].billing_recovery)).toBeInTheDocument();
+    expect(screen.getByText(LOCALES[locale].privacy_billing)).toBeInTheDocument();
+  });
+
+  it.each(LOCALE_ORDER)("blocks payment when storage is unavailable in %s while conversion remains usable", async (locale) => {
+    await renderApp(locale);
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [new File(["synthetic"], "synthetic.pdf")] } });
+    const blocked = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    try {
+      fireEvent.click(screen.getAllByRole("button", { name: LOCALES[locale].pricing_buy })[0]);
+      expect(screen.getByRole("alert")).toHaveTextContent(LOCALES[locale].billing_storage_error);
+      expect(openCheckout).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: LOCALES[locale].convert_button })).toBeEnabled();
+    } finally { blocked.mockRestore(); }
+  });
+
+  it("recovers the initial in-memory capability after storage becomes available in the same tab", async () => {
+    localStorage.clear();
+    const blocked = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+    await renderApp();
+    fireEvent.click(screen.getAllByRole("button", { name: LOCALES.en.pricing_buy })[0]);
+    expect(openCheckout).not.toHaveBeenCalled();
+    blocked.mockRestore();
+    openCheckout.mockResolvedValue({ session_id: "cs_test_recovered", checkout_url: "https://checkout.stripe.com/synthetic", mode: "test", provider: "stripe" });
+    fireEvent.click(screen.getAllByRole("button", { name: LOCALES.en.pricing_buy })[0]);
+    await waitFor(() => expect(openCheckout).toHaveBeenCalledTimes(1));
+    expect(openCheckout.mock.calls[0][0]).toBe(localStorage.getItem("stx_account_id"));
+    expect(navigateCheckout).toHaveBeenCalled();
+  });
+
+  it.each(["starter", "business", "firm", "pack_50", "pack_200", "pack_1000"])("all six paid SKUs can open checkout: %s", async (sku) => {
+    openCheckout.mockResolvedValue({ session_id: "cs_test_synthetic", checkout_url: "https://checkout.stripe.com/synthetic", mode: "test", provider: "stripe" });
+    await renderApp();
+    const ids = ["free", "starter", "business", "firm", "pack_50", "pack_200", "pack_1000"];
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>(".plan-card button, .pack-card button")];
+    fireEvent.click(buttons[ids.indexOf(sku)]);
+    await waitFor(() => expect(openCheckout).toHaveBeenCalledWith(expect.stringMatching(/^web_/), sku, expect.any(String)));
+    expect(navigateCheckout).toHaveBeenCalled();
+  });
+
   it("fails closed if the pricing availability request fails", async () => {
     fetchCheckoutAvailability.mockRejectedValue(new Error("Backend billing configuration is secret"));
     render(<I18nProvider initialLocale="en"><App /></I18nProvider>);

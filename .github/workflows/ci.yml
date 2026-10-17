@@ -1,10 +1,11 @@
 name: CI
 on:
   push:
+    branches: [main]
   pull_request:
 jobs:
   python-backend:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(format(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '"ubuntu-latest"' || vars.STUDIO_CI_UBUNTU_LATEST || '["self-hosted","Linux","ARM64","studio-linux","studio-run-{0}"]', github.run_id)) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,7 +28,7 @@ jobs:
             work/accuracy/accuracy-family-report.json
             work/accuracy/accuracy-report.md
   node-frontend:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(format(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '"ubuntu-latest"' || vars.STUDIO_CI_UBUNTU_LATEST || '["self-hosted","Linux","ARM64","studio-linux","studio-run-{0}"]', github.run_id)) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,7 +44,7 @@ jobs:
         working-directory: frontend
         run: npm test
   browser-end-to-end:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(format(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && '"ubuntu-latest"' || vars.STUDIO_CI_UBUNTU_LATEST || '["self-hosted","Linux","ARM64","studio-linux","studio-run-{0}"]', github.run_id)) }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,7 +63,15 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          if [[ "$RUNNER_NAME" == studio-linux-* ]]; then
+            # Pinned Playwright1.58.2 uses its Ubuntu24 ARM64 compatibility target.
+            # Matching OS dependencies are provisioned by the VM administrator.
+            export PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-arm64
+            echo "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$PLAYWRIGHT_HOST_PLATFORM_OVERRIDE" >> "$GITHUB_ENV"
+            npx playwright install chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
       - name: Build frontend
         working-directory: frontend
         run: npm run build
@@ -71,7 +80,14 @@ jobs:
         run: npm run test:routing
       - name: Upload, convert, and validate the downloaded workbook
         working-directory: frontend
-        run: npx playwright test
+        env:
+          STX_PROVIDER_SDK_DIR: ${{ github.workspace }}/work/provider-sdks
+        run: |
+          mkdir -p ../work/provider-sdks
+          curl --fail --silent --show-error --max-time 30 https://umami.smolkin.org/script.js -o ../work/provider-sdks/umami-script.js
+          curl --fail --silent --show-error --max-time 30 https://static.cloudflareinsights.com/beacon.min.js -o ../work/provider-sdks/cf-beacon.js
+          curl --fail --silent --show-error --max-time 30 'https://www.googletagmanager.com/gtag/js?id=G-SYNTHETIC1' -o ../work/provider-sdks/google-gtag.js
+          npx playwright test
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

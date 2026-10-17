@@ -131,5 +131,6 @@ def test_get_provider_default_is_stripe_test(monkeypatch):
 
 def test_deployed_mock_billing_is_forbidden(monkeypatch):
     monkeypatch.setenv("STX_BILLING_PROVIDER", "mock")
-    with pytest.raises(RuntimeError):
+    from statement_to_excel.billing import BillingError
+    with pytest.raises(BillingError):
         get_provider()

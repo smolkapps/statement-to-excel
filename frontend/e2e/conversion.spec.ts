@@ -2,11 +2,14 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { LOCALES, LOCALE_ORDER } from "../src/i18n";
+import type { Pricing } from "../src/lib/pricing";
 // @ts-expect-error Plain Node server helper also supplies the backend Python.
 import { python } from "./servers.mjs";
 
 const fixture = (name: string) => resolve("../backend/tests/fixtures", name);
 const edgeFixture = (name: string) => resolve("../work/e2e-fixtures", name);
+const pricing = JSON.parse(readFileSync(resolve('src/pricing.json'), 'utf8')) as Pricing;
 
 test.beforeAll(() => {
   // Reuse synthetic drawing helpers only; do not import the API or customer PDFs.
@@ -46,6 +49,7 @@ async function visit(page: Page) {
       root.dataset.testAnalyticsEvents = '[]';
       root.dataset.testAnalyticsProperties = '[]';
       window.umami = { track: (event, data) => {
+        if (!event) return;
         events.push(event);
         if (event === 'convert-success') properties.push(data);
         root.dataset.testAnalyticsEvents = JSON.stringify(events);
@@ -66,9 +70,39 @@ async function analytics(page: Page, kind: "events" | "properties") {
 async function account(page: Page) {
   const id = await page.evaluate(() => localStorage.getItem("stx_account_id"));
   expect(id).toMatch(/^web_/);
-  const response = await page.request.get(`/api/account/${id}`);
+  const response = await page.request.post("/api/account", { data: { account_id: id } });
   expect(response.ok()).toBeTruthy();
   return response.json();
+}
+
+for (const size of [{ width: 1365, height: 900 }, { width: 390, height: 844 }]) {
+  test(`Free allowance and paid monthly terms in all locales at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await visit(page);
+    for (const locale of LOCALE_ORDER) {
+      const t = LOCALES[locale];
+      await page.getByLabel('Select language').selectOption(locale);
+      await expect(page.getByRole('heading', { name: t.pricing_plans_title, exact: true })).toBeVisible();
+      const cards = page.locator('.plan-card');
+      for (const [index, plan] of pricing.plans.entries()) {
+        const card = cards.nth(index);
+        await expect(card.locator('.plan-price')).toContainText(`$${Number(plan.monthly_price_usd)}`);
+        if (plan.id === 'free') {
+          await expect(card.locator('.per')).toHaveCount(0);
+          await expect(card.locator('.plan-feats')).toHaveText(`${plan.included_pages} ${t.pricing_free_pages}`);
+          await expect(card).not.toContainText(t.pricing_included_pages);
+        } else {
+          await expect(card.locator('.per')).toHaveText(t.pricing_per_month);
+          await expect(card.locator('.plan-feats')).toContainText(`${plan.included_pages} ${t.pricing_included_pages}`);
+        }
+      }
+      await expect(page.locator('.account-chip')).toContainText(`${t.account_included_remaining}: 3`);
+      await expect(page.locator('.pricing-explainer').first()).toHaveText(t.billing_recovery);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await cards.first().scrollIntoViewIfNeeded();
+      await page.screenshot({ path: test.info().outputPath(`free-allowance-${locale}-${size.width}.png`), fullPage: true });
+    }
+  });
 }
 
 test("upload → convert → XLSX download uses one request and one page charge even with a rapid double click", async ({ page }, testInfo) => {
@@ -322,4 +356,48 @@ assert workbook['Checks']['B3'].value == 'balanced'
   expect((await account(page)).pages_used_this_cycle).toBe(1);
   const properties = await analytics(page, "properties");
   expect(properties).toEqual([{ balanced: "yes", layout: "card_lines" }]);
+});
+
+test('owned hosted payment management uses private account body and a recoverable failure', async ({ page }) => {
+  await page.route('**/api/account', route => route.fulfill({ json: {
+    id: route.request().postDataJSON().account_id, plan: 'starter', credits: 50,
+    included_pages: 120, pages_used_this_cycle: 2, included_remaining: 118, pro: true,
+    management_available: true, billing_hold: false,
+  } }));
+  const bodies: object[] = [];
+  let fail = true;
+  await page.route('**/api/billing/portal', route => {
+    bodies.push(route.request().postDataJSON());
+    return route.fulfill(fail ? { status: 503, json: { detail: 'Synthetic provider unavailable' } } : { json: { portal_url: 'https://billing.stripe.com/synthetic-management' } });
+  });
+  await page.route('https://billing.stripe.com/**', route => route.fulfill({ contentType: 'text/html', body: '<h1>Synthetic hosted management</h1>' }));
+  await visit(page);
+  const manage = page.getByRole('button', { name: 'Manage subscription and payment method' });
+  await manage.click();
+  await expect(page.getByRole('alert')).toHaveText('Checkout could not be opened. Please try again.');
+  fail = false;
+  await manage.click();
+  await expect(page.getByRole('heading', { name: 'Synthetic hosted management' })).toBeVisible();
+  expect(bodies).toHaveLength(2);
+  expect(Object.keys(bodies[0])).toEqual(['account_id']);
+  expect(bodies[0]).toEqual(bodies[1]);
+});
+
+test('a payment-reconciliation hold gives localized guidance without charges or a download', async ({ page }) => {
+  await visit(page);
+  await page.route('**/api/convert', route => route.fulfill({ status: 409, json: { error: 'billing_hold', detail: 'Synthetic private provider detail' } }));
+  await page.locator('input[type=file]').setInputFiles(edgeFixture('reconciled.pdf'));
+  const messages = new Set<string>(); const downloads: string[] = [];
+  page.on('download', d => downloads.push(d.suggestedFilename()));
+  for (const locale of ['en', 'zh', 'ja', 'es', 'it']) {
+    await page.getByLabel('Select language').selectOption(locale);
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/convert');
+    await page.locator('.convert-controls button').click();
+    expect((await response).status()).toBe(409);
+    const alert = page.getByRole('alert'); await expect(alert).toBeVisible();
+    messages.add(await alert.innerText());
+    expect(await alert.innerText()).not.toContain('Synthetic private provider detail');
+  }
+  expect(messages.size).toBe(5); expect(downloads).toEqual([]);
+  expect((await account(page)).pages_used_this_cycle).toBe(0);
 });

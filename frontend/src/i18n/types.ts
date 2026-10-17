@@ -67,6 +67,7 @@ export interface Translation {
   pricing_credits_title: string;
   pricing_per_month: string;
   pricing_included_pages: string;
+  pricing_free_pages: string;
   pricing_overage: string;
   pricing_buy: string;
   pricing_choose_plan: string;
@@ -74,6 +75,21 @@ export interface Translation {
   pricing_credit_explainer: string;
 
   checkout_error: string;
+  billing_test_mode: string;
+  billing_manage: string;
+  billing_recovery: string;
+  billing_storage_error: string;
+  billing_hold: string;
+  privacy_title: string;
+  privacy_billing: string;
+  privacy_analytics: string;
+  analytics_choice: string;
+  analytics_consent: string;
+  analytics_allow: string;
+  analytics_decline: string;
+  analytics_save_error: string;
+  analytics_next_visit: string;
+  analytics_reload: string;
 
   // account
   account_title: string;
