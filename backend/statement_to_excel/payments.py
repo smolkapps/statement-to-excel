@@ -1,6 +1,6 @@
 """Owned Stripe purchases. No document data and no browser-return grants.
 
-Snapshot webhooks and requests use the same explicitly pinned Stripe contract.
+Outgoing requests and incoming snapshot deliveries have separate exact pins.
 SQLite transactions serialize financial mutations; provider idempotency keys are
 reserved durably before a network request. Test/live databases cannot be mixed.
 """
@@ -17,6 +17,7 @@ from .billing import BillingError, BillingProvider, CREDIT_PACKS, PLANS
 
 APP = "statement-to-excel"
 API_VERSION = "2026-02-25.clover"
+WEBHOOK_API_VERSION = "2026-08-26.dahlia"
 CANONICAL_ORIGIN = "https://statement-to-excel.apps.smolkin.org"
 EVENTS = frozenset({
     "checkout.session.completed", "checkout.session.async_payment_succeeded",
@@ -95,7 +96,7 @@ class StripeBillingProvider(BillingProvider):
         except Exception as exc:
             raise BillingError("Invalid payment signature.", 400) from exc
         require(event.get("livemode") is (self.mode == "live"), "Payment mode mismatch.")
-        require(event.get("api_version") == API_VERSION, "Unsupported webhook API version.")
+        require(event.get("api_version") == WEBHOOK_API_VERSION, "Unsupported webhook API version.")
         return event
 
     def validate_object(self, obj):
@@ -585,7 +586,7 @@ def _apply_webhook(ledger, event, provider):
     provider = provider or get_provider()
     ledger.require_mode(provider.mode)
     require(event.get('livemode') is (provider.mode == 'live'), "Payment mode mismatch.")
-    require(event.get('api_version') == API_VERSION, "Unsupported webhook API version.")
+    require(event.get('api_version') == WEBHOOK_API_VERSION, "Unsupported webhook API version.")
     require(isinstance(event.get('id'), str) and isinstance(event.get('type'), str), "Invalid event.")
     kind = event['type']
     if kind not in EVENTS:

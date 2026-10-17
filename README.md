@@ -224,8 +224,12 @@ history. No public admin/recovery
 API is added. The trusted `payments.resolve_hold` operation requires owner database
 access and does not restore reversed purchases.
 
-Stripe SDK **14.4.1** and snapshot API **2026-02-25.clover** are pinned together;
-actual InvoicePayment and subscription item period shapes are covered in tests.
+Stripe SDK **14.4.1** keeps outgoing HTTP requests pinned to **2026-02-25.clover**.
+The separate incoming snapshot pin is exactly **2026-08-26.dahlia**; the app's
+webhook endpoint must deliver that version. Clover/other deliveries are rejected.
+Synthetic signed snapshots exercise dictionary conversion and required nested
+invoice/subscription fields; genuine target-version TEST delivery remains parent
+verification. The older Clover payment evidence is separate.
 See the [October 16 runbook](docs/codex-live-billing-2026-10-16.md) for the exact
 webhook list, hosted portal setup, migration/rollback, logging and parent-only
 provider checks. No credentials or provider settings are changed by this PR.

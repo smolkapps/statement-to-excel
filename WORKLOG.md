@@ -82,3 +82,31 @@ visible. Desktop/narrow screenshots inspected; all five locales asserted. No
 SDK change or backend/financial rerun, provider operation, current-run CI cancel
 or runner change. Final C implementation 49e093baad08106b07dfb459d0c958238afee836;
 PR8 records the final documentation delivery head. Stop idle CI polling.
+
+## 2026-10-16 America/New_York / October 17 UTC — PR8 correction D
+
+Continue preserved 60bcceb74a0588750a4d97fb0d95e02e85d53d27. Add compile-time
+WEBHOOK_API_VERSION=2026-08-26.dahlia at both incoming guards; preserve SDK 14.4.1
+and outgoing API_VERSION/HTTP2026-02-25.clover. No accept-both/runtime wildcard.
+Official versioning/webhook/Dahlia changelog and installed generic dictionary
+conversion inspected. No required-field loss/schema blocker found in synthetic
+object-tagged signed snapshots; no major-release compatibility claim. The
+deprecated invoice quantity remains available per official Dahlia change.
+
+Focused 60 and full 579 backend tests pass (119 full deprecation warnings), no
+failures/skips. Corpus22 statements / 14 families / 372 exact rows,0 silent errors/
+false alarms. All 12 event types/both modes, unsupported versions before mutation,
+malformed/expired signatures, ownership/mode, renewal/refund/replay and Clover
+HTTP serialization covered with real signature time and synthetic transports.
+No provider API calls or private payloads. Frontend journeys not repeated; their
+old-head215/build/routing2/Chromium31/Camoufox30+1failure and focused 1 pass remain
+separate evidence. Parent's complete older genuine Clover TEST matrix is not
+relabelled as Dahlia; target-version genuine TEST/LIVE-unpaid proof is pending.
+
+Raw blob proof: 125 protected tracked files unchanged from 60b; payments.py is
+otherwise byte-identical after normalizing only the new constant/two incoming
+checks/module docstring. Exact device paragraph preserved once. Root env example
+changes only its wrong operator comment; all assignments unchanged. No frontend,
+catalog, SDK, dependency, runner or provider setting changed. Root AGENTS/README/
+runbook correct only the former single-version instruction. Parent owns endpoint
+setup; no other shared endpoint/default/key touched. No merge/deploy/activation.

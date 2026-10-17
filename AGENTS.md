@@ -212,8 +212,16 @@ holds. Existing rows/balances survive migration; unowned legacy purchases cannot
 be attributed by account_id metadata. Never copy test balances into live billing.
 Back up billing metadata before rollout; never roll back by deleting it.
 
-Pin stripe-python 14.4.1 and request/webhook snapshot API
-`2026-02-25.clover`. Requests and signed objects must match configured livemode.
+Keep stripe-python 14.4.1 and outgoing HTTP `API_VERSION=2026-02-25.clover`.
+Incoming signed snapshot delivery has a separate exact compile-time pin:
+`WEBHOOK_API_VERSION=2026-08-26.dahlia`. Configure only this app's endpoint with
+that delivery version; reject Clover and every other incoming version. Both
+requests and signed objects must match configured livemode. Python's dictionary
+conversion preserves snapshot fields; that is not proof of cross-major schema
+compatibility. Parent must verify genuine signed target-version TEST events
+before LIVE, retaining the older Clover evidence separately. Preserve the
+runbook's exact twelve event types; do not change other endpoints, account defaults,
+dependencies or runtime version settings to accommodate the endpoint-version cap.
 Namespace new metadata `app=statement-to-excel` plus opaque purchase/binding
 references; never send browser account capabilities to Stripe metadata.
 Resolve events through owned durable references; valid foreign-app events are

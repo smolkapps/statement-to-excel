@@ -1,6 +1,7 @@
 """Synthetic modern Stripe objects, actual signature verifier and SQLite races.
 
-No provider requests. Doubles preserve the 2026-02-25.clover object nesting.
+No provider requests. Synthetic financial fields are shared across pinned Clover
+HTTP responses and exact Dahlia snapshot envelopes, not captured provider data.
 """
 import copy
 import hashlib
@@ -15,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 import statement_to_excel.api as api
 from statement_to_excel.billing import BillingError, PersistentLedger, StripeBillingProvider, apply_webhook, create_checkout
-from statement_to_excel.payments import API_VERSION, APP, amount, create_portal, resolve_hold
+from statement_to_excel.payments import API_VERSION, WEBHOOK_API_VERSION, APP, amount, create_portal, resolve_hold
 
 SECRET = 'whsec_synthetic_not_a_credential'
 PURCHASES = {}
@@ -117,7 +118,7 @@ def sign(payload, secret=SECRET, timestamp=None):
 
 
 def event(obj, kind='checkout.session.completed', event_id=None):
-    return {'id': event_id or 'evt_' + uuid.uuid4().hex, 'type': kind, 'created': int(time.time()), 'livemode': obj['livemode'], 'api_version': API_VERSION, 'data': {'object': copy.deepcopy(obj)}}
+    return {'id': event_id or 'evt_' + uuid.uuid4().hex, 'type': kind, 'created': int(time.time()), 'livemode': obj['livemode'], 'api_version': WEBHOOK_API_VERSION, 'data': {'object': copy.deepcopy(obj)}}
 
 
 def buy(ledger, provider, sku='pack_50', key='purchase-request-000000001', account='buyer'):
@@ -478,7 +479,7 @@ def test_terminal_before_payment_does_not_trap_pending_checkout_and_old_events_c
 
 
 @pytest.mark.parametrize('mode', ['test', 'live'])
-def test_real_stripe_sdk_serializes_pinned_api_and_server_owned_checkout_without_capability(ledger, mode):
+def test_real_stripe_sdk_serializes_pinned_api_and_server_owned_checkout_without_capability(ledger, mode, monkeypatch):
     import stripe
     from urllib.parse import parse_qs
     calls = []
@@ -488,12 +489,17 @@ def test_real_stripe_sdk_serializes_pinned_api_and_server_owned_checkout_without
             calls.append({'method': method, 'url': url, 'headers': headers, 'body': parse_qs(post_data or '')})
             fields = calls[-1]['body']; ref = fields['metadata[purchase_ref]'][0]
             return json.dumps({'id': 'cs_synthetic', 'object': 'checkout.session', 'livemode': mode == 'live', 'customer': 'cus_synthetic', 'metadata': {'app': APP, 'purchase_ref': ref}, 'mode': 'subscription', 'amount_total': 7900, 'currency': 'usd', 'url': 'https://checkout.stripe.com/synthetic-only'}), 200, {}
-    client = stripe.StripeClient('sk_' + mode + '_synthetic_transport', stripe_version=API_VERSION, http_client=Transport(), max_network_retries=0)
-    p = StripeBillingProvider('sk_' + mode + '_synthetic_transport', SECRET, mode=mode, client=client, portal_configuration='bpc_synthetic')
+    def transport(**kwargs):
+        assert kwargs == {'timeout': 10}
+        return Transport()
+    monkeypatch.setattr(stripe, 'RequestsClient', transport)
+    p = StripeBillingProvider('sk_' + mode + '_synthetic_transport', SECRET, mode=mode, portal_configuration='bpc_synthetic')
     p.create_checkout('cus_synthetic', 'business', 'stx_synthetic_idempotency', 'opaque_synthetic_purchase')
     assert len(calls) == 1
     sent = calls[0]
-    assert sent['headers']['Stripe-Version'] == API_VERSION
+    assert stripe.VERSION == '14.4.1'
+    assert sent['headers']['Stripe-Version'] == API_VERSION == '2026-02-25.clover'
+    assert WEBHOOK_API_VERSION == '2026-08-26.dahlia' != API_VERSION
     assert sent['headers']['Idempotency-Key'] == 'stx_synthetic_idempotency'
     assert sent['body']['line_items[0][price_data][unit_amount]'] == ['7900']
     assert sent['body']['line_items[0][quantity]'] == ['1']
