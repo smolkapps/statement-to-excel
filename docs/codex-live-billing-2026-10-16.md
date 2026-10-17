@@ -8,9 +8,108 @@ Refreshed parent commit 8b9dbda64904db0eb4427dc3dfeb09c559a552a4 was fast-forwar
 and preserved (Studio Linux runners and WORKLOG). Initial corrective code:
 8e0519fd9e120deb7b217c911cad13b86f0a6395. B verified implementation head:
 11a6d5981946c6315cde7ac286f2d33209d6f279 (owned unpaid PI recovery).
-The PR records the exact current delivery head including correction C.
+The PR records the exact current delivery head including correction D.
 PRs #5/#6/#7 and their branches/reports are preserved. No other open PR owned this work at the initial or final remote
 check. Nothing was pushed to main, merged or deployed.
+
+## PR8 correction D — independent webhook delivery pin
+
+Preserved starting head: `60bcceb74a0588750a4d97fb0d95e02e85d53d27`.
+Verified D implementation: `6d4ea66144faf9c19a830d9ca84e6698c8b8b526`; the PR records the final
+documentation delivery head.
+Verification date: October 16 America/New_York / October 17 UTC. Parent reports
+Stripe's LIVE endpoint creation hit its three-unique-version cap, with no Statement
+LIVE endpoint/secret/live.env created; production remains 575d0e4/unmetered. This
+source-only correction does not change another endpoint or the account default.
+
+| Boundary | Exact contract |
+| --- | --- |
+| Installed stripe-python | **14.4.1**, unchanged |
+| Outgoing HTTP / `API_VERSION` | **2026-02-25.clover**, unchanged |
+| Incoming signed snapshot / `WEBHOOK_API_VERSION` | **2026-08-26.dahlia** only |
+
+Both verify_event and the direct handler reject Clover, earlier Dahlia, missing,
+malformed or any other delivery version before financial mutation. Existing
+signature/mode/ownership/amount guards and the exact twelve events below remain.
+No runtime override, prefix matching, accept-both fallback, SDK upgrade, thin-event
+migration or financial/data migration is introduced. Parent configures only
+Statement's endpoint to this exact delivery version after genuine target-version
+TEST verification; shared endpoints/defaults/keys/security stay untouched.
+
+### D compatibility review and required fields
+
+Official [API versioning](https://docs.stripe.com/api/versioning) and
+[webhook versioning](https://docs.stripe.com/webhooks/versioning) distinguish an
+endpoint's snapshot version from the HTTP Stripe-Version override. Monthly Dahlia
+releases are documented additive; Clover to Dahlia crosses a major boundary and
+is not assumed compatible. The [Dahlia changelog](https://docs.stripe.com/changelog/dahlia)
+was inspected, including its March major/August 26 overview. The
+[decimal quantity change](https://docs.stripe.com/changelog/dahlia/2026-03-25/invoice-items-decimal-quantity)
+adds quantity_decimal but explicitly retains deprecated integer quantity. This
+app continues its existing quantity 1/catalog checks and does not add decimal billing.
+
+Installed SDK 14.4.1 Webhook.construct_event verifies HMAC/time, JSON-decodes and
+constructs a generic Event without enforcing its generated HTTP version on the
+envelope. StripeObject refresh iterates incoming keys; to_dict_recursive preserves
+nested dictionaries/lists and unknown fields. Tests use actual event/resource/list/
+line-item object tags and assert exact signed JSON-to-dictionary round trips.
+The existing deprecation warnings remain; no replacement deserializer is needed.
+
+| Path consumed by existing handlers | D review / synthetic coverage |
+| --- | --- |
+| Envelope id/type/created/livemode/api_version | Real signature verification; strict version/mode rejection, real clock; expired-signature negative case |
+| Checkout customer/metadata, mode/currency/amount_total/payment_status, payment_intent/subscription/invoice | Owned durable references, paid grant once, terminal/no-payment events, duplicate replay |
+| Invoice parent.subscription_details.subscription/metadata and lines.data[].parent.subscription_item_details | Real SDK nested conversion, subscription/item/proration/period/quantity/amount validation; invoice-before-checkout and renewal |
+| Invoice status/amount_due/amount_paid/currency/status_transitions.paid_at | Existing paid evidence and out-of-order ordering checks preserved; retrieved InvoicePayments/PI/Charge remain Clover HTTP |
+| Subscription items.data[].current_period_start/end, quantity, price.unit_amount/currency/recurring; status/cancel_at_period_end/ended_at | Signed deleted snapshots exercise Dahlia dictionary path; updated/current subscriptions are retrieved through Clover |
+| Charge: customer/metadata/payment_intent/currency/amount/amount_refunded/disputed; Dispute: charge/payment_intent/currency/amount/created | Signed refund/dispute types, non-revival/replay and retained newer paid service; current resource evidence retrieved through Clover |
+
+No concrete incompatible required-field change or SDK field loss was found in
+this source/docs/synthetic review. Missing/conflicting required evidence keeps
+existing fail-closed/reconciliation behavior. These are synthetic objects, not
+private target-version payloads or genuine delivery proof. Parent compares actual
+required fields and proves signed 2026-08-26.dahlia on the intended runtime before
+LIVE. Immutable Event API snapshots rendered 2026-04-22.dahlia remain distinct from
+prior signed Clover delivery and are not relabelled as target-version evidence.
+
+### D verification and identity
+
+- Focused version/HTTP suite: **60 passed**.
+- Full backend: **579 passed**, 119 SDK/Starlette deprecation warnings; 0 failures/skips.
+- Synthetic corpus: **22 statements / 14 families / 372 exact ordered rows**, 100% per family; 0 missing/extra,0 silent errors,0 false alarms (table below).
+- All twelve signed event types in both modes use real SDK conversion; rejection snapshots prove no ledger/provider-call mutation. Renewal, old-invoice-only refund, restart and delayed/duplicate deliveries preserve 117 owed Starter pages and separate 200-credit pack in the fixture.
+- Actual StripeClient construction/HTTP serialization still sends 2026-02-25.clover with SDK 14.4.1; transport is synthetic and no provider API is contacted.
+
+**125 protected tracked files are byte-identical** to 60bcceb, including every
+frontend/public SDK/bootstrap/config/catalog/dependency/CI input. Combined SHA-256:
+`362fa6a376a95e2719bdeda7d3e2ccdf128f6c439f77ddb156da5f34c08e095e`.
+Normalizing only the new delivery constant, the two incoming comparisons and the
+module docstring makes payments.py byte-identical to 60bcceb: all financial
+functions/HTTP client/outbox/retention/deadline/parser/exporter behavior remains.
+The exact N759MS/device/capacity paragraph remains once unchanged; root AGENTS
+changes only version guidance. .env.example corrects one operator comment only,
+with all assignments unchanged. GA/CF public slots stay empty/off.
+
+D changes only these eight paths (plus no generated artifacts): .env.example,
+AGENTS.md, README.md, WORKLOG.md, backend/statement_to_excel/payments.py,
+backend/tests/test_billing_stripe.py, backend/tests/test_webhook_versions.py, and
+this runbook. Complete cumulative file list is below. No current-head/parent-owned
+CI was canceled; no runner/routing/settings changes. Parent owns one final exact-head
+CI check; queued jobs are not reported as passes, and idle CI polling stops at delivery.
+
+Frontend 215/build/routing 2/Chromium 31 and Camoufox 30 passed/1 unchanged SDK-capture
+failure plus focused 1 pass are **old 60b unchanged-input evidence**, not rerun or
+claimed universal for D. The earlier backend 521 baseline is superseded by the
+new 579 synthetic/backend run, without changing the provenance of prior provider tests.
+No new physical-device/simulator, real-bank, genuine provider or LIVE test occurred.
+
+Parent reports the older genuine TEST matrix at 2d/60b covers all six offers, hosted
+pack/monthly, XLSX/CSV/JSON, paid renewal, old-only refund preserving newer owed
+service, restart/expiry, failure/recovery, period-end terminal behavior, unused/
+consumed refunds, genuine dispute/closure, and a **separately labelled local
+duplicate replay**. That evidence remains earlier Clover delivery and is not Dahlia delivery
+proof. Genuine target-version TEST and LIVE-unpaid proofs remain pending parent;
+no real self-charge or cloud provider operation is authorized/performed.
 
 ## PR8 correction C — truthful Free allowance and notices
 
@@ -453,8 +552,15 @@ All ten existing layouts remain at 100%; this is synthetic regression coverage.
    enabled (Uvicorn auto/on) so cancellation retry starts automatically. Install
    the pinned dependencies. Parent supplies matching Stripe mode/key/webhook
    secrets from its existing secret store, never source or command output.
-2. Configure this app's snapshot webhook endpoint at `/api/stripe/webhook` with
-   API version **2026-02-25.clover**, matching stripe-python **14.4.1**. Subscribe
+2. Configure only this app's snapshot webhook endpoint at `/api/stripe/webhook`
+   with exact delivery API version **2026-08-26.dahlia** (`WEBHOOK_API_VERSION`).
+   Keep stripe-python **14.4.1** and outgoing HTTP **2026-02-25.clover**
+   (`API_VERSION`). The independent pins are intentional; every other incoming
+   version, including Clover/earlier Dahlia, is rejected. Do not change other
+   endpoints, account defaults or keys to work around the shared version cap.
+   Parent first proves genuine signed target-version TEST delivery, separately
+   from the older Clover evidence, before creating only Statement's LIVE endpoint.
+   Subscribe
    to exactly the following app-relevant event types (shared-account foreign
    events are inert):
 
@@ -558,6 +664,7 @@ local suite results above are the evidence recorded here.
 
 ### Official contracts inspected
 
+- [API versioning](https://docs.stripe.com/api/versioning), [webhook versioning](https://docs.stripe.com/webhooks/versioning), [Dahlia changes](https://docs.stripe.com/changelog/dahlia), [retained integer quantity](https://docs.stripe.com/changelog/dahlia/2026-03-25/invoice-items-decimal-quantity)
 - [Stripe SDK pinned version](https://github.com/stripe/stripe-python/blob/v14.4.1/stripe/_api_version.py)
 - [Subscription item periods](https://docs.stripe.com/changelog/basil/2025-03-31/deprecate-subscription-current-period-start-and-end)
 - [Invoice](https://docs.stripe.com/api/invoices/object), [line item](https://docs.stripe.com/api/invoice-line-item/object), [InvoicePayment](https://docs.stripe.com/api/invoice-payment/object)
@@ -572,7 +679,7 @@ local suite results above are the evidence recorded here.
 
 ## Every changed file
 
-52 files relative to refreshed main:
+53 files relative to refreshed main:
 
 - `.env.example`
 - `.github/workflows/ci.yml`
@@ -592,6 +699,7 @@ local suite results above are the evidence recorded here.
 - `backend/tests/test_checkout_availability.py`
 - `backend/tests/test_payment_recovery.py`
 - `backend/tests/test_upload_limits.py`
+- `backend/tests/test_webhook_versions.py`
 - `docs/codex-live-billing-2026-10-16.md`
 - `frontend/.env.production`
 - `frontend/deploy/nginx.conf.example`

@@ -110,3 +110,6 @@ changes only its wrong operator comment; all assignments unchanged. No frontend,
 catalog, SDK, dependency, runner or provider setting changed. Root AGENTS/README/
 runbook correct only the former single-version instruction. Parent owns endpoint
 setup; no other shared endpoint/default/key touched. No merge/deploy/activation.
+
+Verified D implementation: 6d4ea66144faf9c19a830d9ca84e6698c8b8b526. Final PR delivery
+head includes the report update; no extra CI pass gate or idle polling.
