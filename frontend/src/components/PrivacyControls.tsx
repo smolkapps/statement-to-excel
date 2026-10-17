@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n/I18nContext';
-import { optionalAnalyticsConfigured, analyticsConsent, setAnalyticsConsent } from '../lib/analytics';
+import { optionalAnalyticsConfigured, analyticsConsent, setAnalyticsConsent, type ConsentResult } from '../lib/analytics';
 
 export function PrivacyControls() {
   const { t } = useI18n();
@@ -8,7 +8,12 @@ export function PrivacyControls() {
   const [saveFailed, setSaveFailed] = useState(false);
   const [nextVisit, setNextVisit] = useState(false);
   useEffect(() => {
-    const refresh = () => setAllowed(analyticsConsent());
+    const refresh = (event: Event) => {
+      const result = (event as CustomEvent<ConsentResult>).detail;
+      setAllowed(result ? result.allowed : analyticsConsent());
+      setSaveFailed(result ? !result.saved : false);
+      setNextVisit(result?.nextVisit ?? false);
+    };
     window.addEventListener('stx-analytics-choice', refresh);
     return () => window.removeEventListener('stx-analytics-choice', refresh);
   }, []);

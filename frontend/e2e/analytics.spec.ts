@@ -353,6 +353,13 @@ test('cross-tab storage.clear revokes real optional SDKs immediately', async ({ 
   await page.locator('head').evaluate(head => { const s=document.createElement('script'); s.src='/__sdk/visibility-flush.js'; head.appendChild(s); });
   await page.waitForTimeout(350);
   expect(captured.bodies.filter(p => p.provider !== 'umami')).toHaveLength(count);
+  // Reallowing retired SDKs requires a later visit. A subsequent cross-tab
+  // revocation must also retire that stale acceptance/reload notice.
+  await page.getByRole('button', { name: 'Allow optional analytics', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Reload page', exact: true })).toBeVisible();
+  await other.evaluate(() => localStorage.clear());
+  await expect(page.getByRole('button', { name: 'Decline optional analytics', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Reload page', exact: true })).toHaveCount(0);
   await other.close();
 });
 

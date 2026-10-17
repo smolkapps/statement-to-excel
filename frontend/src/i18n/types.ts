@@ -67,6 +67,7 @@ export interface Translation {
   pricing_credits_title: string;
   pricing_per_month: string;
   pricing_included_pages: string;
+  pricing_free_pages: string;
   pricing_overage: string;
   pricing_buy: string;
   pricing_choose_plan: string;

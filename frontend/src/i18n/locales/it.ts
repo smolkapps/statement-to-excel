@@ -62,10 +62,11 @@ export const it: Translation = {
   pricing_title: "Prezzi pensati per le aziende",
   pricing_subtitle:
     "Piani mensili a tariffa fissa per volumi costanti, o crediti prepagati quando converti solo di tanto in tanto.",
-  pricing_plans_title: "Piani mensili",
+  pricing_plans_title: "Pagine gratuite e piani mensili",
   pricing_credits_title: "Pacchetti di crediti prepagati",
   pricing_per_month: "/mese",
   pricing_included_pages: "pagine / mese incluse",
+  pricing_free_pages: "pagine gratuite per account salvato in questo browser. Non si rinnovano automaticamente.",
   pricing_overage: "Dopo le pagine incluse: 1 credito prepagato per pagina.",
   pricing_buy: "Acquista",
   pricing_choose_plan: "Scegli il piano",
@@ -92,7 +93,7 @@ export const it: Translation = {
   account_title: "Il tuo account",
   account_plan: "Piano",
   account_credits: "Crediti",
-  account_included_remaining: "Pagine incluse rimaste in questo ciclo",
+  account_included_remaining: "Pagine incluse rimanenti",
   account_buy_credits: "Acquista crediti",
 
   footer_tagline: "Il modo più veloce per passare da un estratto conto PDF a un foglio di calcolo.",

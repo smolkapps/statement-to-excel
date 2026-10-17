@@ -52,3 +52,25 @@ alarms; 29 Chromium and 29 agent-owned Camoufox passed. Actual blocked SDK
 receipts and desktop/narrow layouts inspected; two downloaded Checks workbooks
 independently calculate printed closing figures (stored formula caches blank).
 No genuine provider, device/simulator or real-bank verification is claimed.
+
+## 2026-10-17 UTC — PR8 correction C (A19/P3)
+
+Continue from preserved 2d514169e4ae73533981f26abdcebe13fbfa0100. Only
+frontend copy/components/tests and this report/worklog change: Free is three
+non-replenishing pages per saved browser account, paid monthly terms and all
+catalog numbers stay intact. Apply the exact five-locale heading/free suffix/
+remaining-page copy. Cross-tab choice refresh clears obsolete notices while
+current local choice results retain their exact notices. Analytics code, payloads,
+cookies, frames, SDK bytes, backend, configuration and AGENTS are unchanged.
+No reset feature or provider operation. Parent-reported genuine TEST pack grant
+is independent parent evidence, not a cloud fixture/payment claim.
+
+Focused regressions: 11 passed; full frontend: 215 passed in 13 files; final
+SEO/TypeScript/Vite build and both routing checks pass. Initial new test queries
+used an unsupported Testing Library option; corrected before the passing build.
+Raw blob checks prove all 118 protected tracked files byte-identical to 2d514169;
+combined SHA-256 7c51aeb870a6cb6bf323aa784726bce64a4f25ab0b1dfbe9c98cad3011d09fb7.
+Affected browser layout/notice checks and final delivery are recorded below and
+in docs/codex-live-billing-2026-10-16.md. Unchanged financial suites/transactions
+are not repeated for this UI-only correction. Parent owns final exact-head CI;
+no current-head CI run or parent-owned run/settings is canceled/changed.

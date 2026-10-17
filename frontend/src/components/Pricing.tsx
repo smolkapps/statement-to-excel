@@ -25,11 +25,11 @@ export function Pricing({ onBuyPack, onChoosePlan, busy = false }: Props) {
             <h4>{plan.name}</h4>
             <p className="plan-price">
               {formatUsd(plan.monthly_price_usd)}
-              <span className="per">{t.pricing_per_month}</span>
+              {plan.id !== "free" && <span className="per">{t.pricing_per_month}</span>}
             </p>
             <ul className="plan-feats">
               <li>
-                {plan.included_pages} {t.pricing_included_pages}
+                {plan.included_pages} {plan.id === "free" ? t.pricing_free_pages : t.pricing_included_pages}
               </li>
               {Number(plan.overage_per_page_usd) > 0 && (
                 <li>

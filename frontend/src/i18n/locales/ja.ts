@@ -62,10 +62,11 @@ export const ja: Translation = {
   pricing_title: "ビジネス向けの料金",
   pricing_subtitle:
     "安定した利用には月額プラン、たまに変換する方には前払いクレジットを。",
-  pricing_plans_title: "月額プラン",
+  pricing_plans_title: "無料ページと月額プラン",
   pricing_credits_title: "前払いクレジットパック",
   pricing_per_month: "/月",
   pricing_included_pages: "ページ/月 込み",
+  pricing_free_pages: "ページ無料（このブラウザーに保存したアカウントごと）。自動では補充されません。",
   pricing_overage: "含まれるページ数を超えると、1ページにつき前払いクレジット1つを使用します。",
   pricing_buy: "購入",
   pricing_choose_plan: "プランを選ぶ",
@@ -92,7 +93,7 @@ export const ja: Translation = {
   account_title: "アカウント",
   account_plan: "プラン",
   account_credits: "クレジット",
-  account_included_remaining: "今期の残り込みページ数",
+  account_included_remaining: "プラン内の残りページ数",
   account_buy_credits: "クレジットを購入",
 
   footer_tagline: "銀行明細PDFから表へ、最速の方法。",

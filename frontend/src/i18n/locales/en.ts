@@ -62,10 +62,11 @@ export const en: Translation = {
   pricing_title: "Pricing built for businesses",
   pricing_subtitle:
     "Flat monthly plans for steady volume, or prepaid credits when you only convert now and then.",
-  pricing_plans_title: "Monthly plans",
+  pricing_plans_title: "Free pages and monthly plans",
   pricing_credits_title: "Prepaid credit packs",
   pricing_per_month: "/mo",
   pricing_included_pages: "pages / month included",
+  pricing_free_pages: "free pages per saved browser account. No automatic replenishment.",
   pricing_overage: "After included pages: 1 prepaid credit per page.",
   pricing_buy: "Buy",
   pricing_choose_plan: "Choose plan",
@@ -92,7 +93,7 @@ export const en: Translation = {
   account_title: "Your account",
   account_plan: "Plan",
   account_credits: "Credits",
-  account_included_remaining: "Included pages left this cycle",
+  account_included_remaining: "Included pages remaining",
   account_buy_credits: "Buy credits",
 
   footer_tagline: "The fastest way from bank-statement PDF to spreadsheet.",

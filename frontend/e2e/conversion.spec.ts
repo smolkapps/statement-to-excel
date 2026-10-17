@@ -2,11 +2,14 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { LOCALES, LOCALE_ORDER } from "../src/i18n";
+import type { Pricing } from "../src/lib/pricing";
 // @ts-expect-error Plain Node server helper also supplies the backend Python.
 import { python } from "./servers.mjs";
 
 const fixture = (name: string) => resolve("../backend/tests/fixtures", name);
 const edgeFixture = (name: string) => resolve("../work/e2e-fixtures", name);
+const pricing = JSON.parse(readFileSync(resolve('src/pricing.json'), 'utf8')) as Pricing;
 
 test.beforeAll(() => {
   // Reuse synthetic drawing helpers only; do not import the API or customer PDFs.
@@ -70,6 +73,36 @@ async function account(page: Page) {
   const response = await page.request.post("/api/account", { data: { account_id: id } });
   expect(response.ok()).toBeTruthy();
   return response.json();
+}
+
+for (const size of [{ width: 1365, height: 900 }, { width: 390, height: 844 }]) {
+  test(`Free allowance and paid monthly terms in all locales at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await visit(page);
+    for (const locale of LOCALE_ORDER) {
+      const t = LOCALES[locale];
+      await page.getByLabel('Select language').selectOption(locale);
+      await expect(page.getByRole('heading', { name: t.pricing_plans_title, exact: true })).toBeVisible();
+      const cards = page.locator('.plan-card');
+      for (const [index, plan] of pricing.plans.entries()) {
+        const card = cards.nth(index);
+        await expect(card.locator('.plan-price')).toContainText(`$${Number(plan.monthly_price_usd)}`);
+        if (plan.id === 'free') {
+          await expect(card.locator('.per')).toHaveCount(0);
+          await expect(card.locator('.plan-feats')).toHaveText(`${plan.included_pages} ${t.pricing_free_pages}`);
+          await expect(card).not.toContainText(t.pricing_included_pages);
+        } else {
+          await expect(card.locator('.per')).toHaveText(t.pricing_per_month);
+          await expect(card.locator('.plan-feats')).toContainText(`${plan.included_pages} ${t.pricing_included_pages}`);
+        }
+      }
+      await expect(page.locator('.account-chip')).toContainText(`${t.account_included_remaining}: 3`);
+      await expect(page.locator('.pricing-explainer').first()).toHaveText(t.billing_recovery);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await cards.first().scrollIntoViewIfNeeded();
+      await page.screenshot({ path: test.info().outputPath(`free-allowance-${locale}-${size.width}.png`), fullPage: true });
+    }
+  });
 }
 
 test("upload → convert → XLSX download uses one request and one page charge even with a rapid double click", async ({ page }, testInfo) => {

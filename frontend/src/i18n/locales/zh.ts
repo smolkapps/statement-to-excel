@@ -62,10 +62,11 @@ export const zh: Translation = {
   pricing_title: "为企业打造的价格",
   pricing_subtitle:
     "稳定用量可选固定月付套餐；偶尔转换则可选预付点数。",
-  pricing_plans_title: "月付套餐",
+  pricing_plans_title: "免费页数与月付套餐",
   pricing_credits_title: "预付点数包",
   pricing_per_month: "/月",
   pricing_included_pages: "页 / 月（含）",
+  pricing_free_pages: "页免费额度，按此浏览器中保存的账户计算，不会自动补充。",
   pricing_overage: "超出包含页数后：每页使用 1 个预付积分。",
   pricing_buy: "购买",
   pricing_choose_plan: "选择套餐",
@@ -92,7 +93,7 @@ export const zh: Translation = {
   account_title: "您的账户",
   account_plan: "套餐",
   account_credits: "点数",
-  account_included_remaining: "本周期剩余含页数",
+  account_included_remaining: "剩余套餐内页数",
   account_buy_credits: "购买点数",
 
   footer_tagline: "从银行对账单 PDF 到表格，最快的方式。",
