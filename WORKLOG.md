@@ -74,3 +74,11 @@ Affected browser layout/notice checks and final delivery are recorded below and
 in docs/codex-live-billing-2026-10-16.md. Unchanged financial suites/transactions
 are not repeated for this UI-only correction. Parent owns final exact-head CI;
 no current-head CI run or parent-owned run/settings is canceled/changed.
+
+C browser evidence: Chromium 31 passed; Camoufox full 30 passed/1 failed/0 skipped
+(existing unchanged Google SDK capture case); one focused unchanged rerun passed.
+All new C cases pass in both browsers. Keep the intermittent full-run failure
+visible. Desktop/narrow screenshots inspected; all five locales asserted. No
+SDK change or backend/financial rerun, provider operation, current-run CI cancel
+or runner change. Final C implementation 49e093baad08106b07dfb459d0c958238afee836;
+PR8 records the final documentation delivery head. Stop idle CI polling.

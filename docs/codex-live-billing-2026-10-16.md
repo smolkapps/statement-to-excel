@@ -6,12 +6,93 @@ Repository: smolkapps/statement-to-excel. Branch:
 Correction B continues reviewed delivery b23cfc04996ab83acbeb4079df30c7149231f460.
 Refreshed parent commit 8b9dbda64904db0eb4427dc3dfeb09c559a552a4 was fast-forwarded
 and preserved (Studio Linux runners and WORKLOG). Initial corrective code:
-8e0519fd9e120deb7b217c911cad13b86f0a6395. Final verified implementation head:
+8e0519fd9e120deb7b217c911cad13b86f0a6395. B verified implementation head:
 11a6d5981946c6315cde7ac286f2d33209d6f279 (owned unpaid PI recovery).
-The PR records the exact current delivery head including this report update. PRs #5/#6/#7
-and their branches/reports
-are preserved. No other open PR owned this work at the initial or final remote
+The PR records the exact current delivery head including correction C.
+PRs #5/#6/#7 and their branches/reports are preserved. No other open PR owned this work at the initial or final remote
 check. Nothing was pushed to main, merged or deployed.
+
+## PR8 correction C — truthful Free allowance and notices
+
+Starting preserved head: `2d514169e4ae73533981f26abdcebe13fbfa0100`.
+C implementation: `49e093baad08106b07dfb459d0c958238afee836`; the PR records
+the exact delivery head including this report update.
+The October 17 UTC / October 16 owner-timezone follow-up is frontend-only:
+Free displays the catalog's 3 total pages per saved browser account and explicitly
+says there is no automatic replenishment. Free has no monthly price suffix. The
+plan-group heading includes Free; the account label is generic. Applied the exact
+approved copy in English, Spanish, Italian, Japanese and Chinese. Paid monthly
+prices/allowances, all pack terms, extra-page credit debit, browser recovery
+disclosure and unconfigured/unmetered behavior remain unchanged. No reset feature
+or storage-clearing workaround is introduced.
+
+PrivacyControls refreshes obsolete save-error/next-visit notices with the changed
+choice. Cross-tab revoke/clear removes a stale acceptance/reload notice; a later
+successful choice removes the old persistence error. The exact current local
+choice notices remain. All stop-before-persist/SDK-withdrawal logic stays in the
+unchanged analytics module; no consent architecture, payload/cookie/frame/SDK
+change is included.
+
+Raw Git blob checks prove **118 protected tracked files byte-identical** to 2d514169:
+all backend source/tests, pricing.json, analytics/privacy libraries, all public
+SDK/frame/bootstrap files, public provider/build/dependency/CI configuration, and
+root AGENTS including the exact once-present device/capacity policy. Combined
+SHA-256: `7c51aeb870a6cb6bf323aa784726bce64a4f25ab0b1dfbe9c98cad3011d09fb7`.
+The only C paths are the 12 frontend source/test files listed below plus this
+report and WORKLOG.md.
+
+C validation: focused **11 passed**; full frontend **215 passed in 13 files**;
+SEO/TypeScript/Vite production build and **2 routing checks passed**. Initial
+new test-query typing and a Playwright JSON import-attribute collection error
+were corrected before final verification; neither changed product behavior or
+configuration. Agent-owned Chromium: **31 passed, 0 failed/skipped**. Agent-owned
+Camoufox full run: **30 passed, 1 failed, 0 skipped**; the unchanged Google SDK
+mapping/cookie test did not capture checkout_opened within its bound (and teardown
+reached its timeout). One focused rerun of that same case **passed** with no source
+change. Preserve the full-run failure as intermittent capture evidence; do not
+claim a completely green Camoufox full run for C. Its test body/transport fixture,
+analytics module and SDK bytes match 2d514169. All new C cases passed in both
+browsers. No SDK repair or weakened assertion was introduced for this result.
+
+Both viewport cases check Free versus all three paid cards and the account label
+in all five locales, with ten locale/viewport screenshots per browser. Desktop
+1365x900 and narrow 390x844 English captures were visually inspected at original
+resolution; text wraps and no horizontal overflow is observed/asserted. Existing
+console/network journeys show no page exceptions/failed local requests; expected
+unsupported-input HTTP 422 is retained. SDK transport remains intercepted using
+synthetic fixtures, not genuine provider acceptance. Screenshots, raw browser
+reports and byte-identity proof remain ignored under work/. No physical device,
+iOS simulator or Android emulator was available/used on this Linux host.
+
+No current final-head CI run was canceled. No CI/runner/account setting changed;
+parent-owned 8b runs/settings remain preserved. Parent may perform one final
+exact-head run after the final push; subsequent status is reported once in PR8
+without idle polling or inferring CI success from local tests.
+Backend **521**, the **22/14/372** synthetic corpus with zero silent errors/false
+alarms, and workbook/financial evidence below belong to the unchanged B code;
+unchanged financial suites or genuine transactions were not repeated for C.
+Parent reports an independently verified original-Clover-signed TEST pack purchase
+with one 50-credit grant at 2d514169. That is parent evidence, not a cloud purchase
+or proof of other genuine lifecycle scenarios. Parent retains source acceptance,
+genuine financial/analytics setup, final exact-head CI and live cutover. No merge,
+deployment, provider/credential operation or runner setting change occurred here.
+
+C changed paths:
+
+- `WORKLOG.md`
+- `docs/codex-live-billing-2026-10-16.md`
+- `frontend/e2e/analytics.spec.ts`
+- `frontend/e2e/conversion.spec.ts`
+- `frontend/src/components/Pricing.tsx`
+- `frontend/src/components/Pricing.test.tsx`
+- `frontend/src/components/PrivacyControls.tsx`
+- `frontend/src/components/PrivacyControls.test.tsx`
+- `frontend/src/i18n/types.ts`
+- `frontend/src/i18n/locales/en.ts`
+- `frontend/src/i18n/locales/es.ts`
+- `frontend/src/i18n/locales/it.ts`
+- `frontend/src/i18n/locales/ja.ts`
+- `frontend/src/i18n/locales/zh.ts`
 
 ## Authority and changes
 
@@ -185,8 +266,8 @@ or re-enables stale acceptance. Retired SDKs reallow on the next visit via an
 explicit reload control.
 
 Google's five approved names use underscores; historical Umami names stay
-hyphenated. Only convert_success has the same balanced/layout enums. No new
-funnel event, property, destination or analytics backend/proxy was added. Actual
+hyphenated. Only convert_success has the same balanced/layout enums. No additional
+Umami destination, custom funnel event/property or analytics backend/proxy was added. Actual
 Google diagnostics were observed bypassing ga-disable during pending startup.
 Google now executes official unmodified bytes inside a small disposable
 same-origin frame with a clean static URL/no referrer, receiving only sanitized
@@ -216,7 +297,7 @@ the existing opportunistic 24-hour expiry; payment idempotency/history is durabl
 No real/customer statement, runtime database, credential or generated workbook
 is committed.
 
-## Verification
+## B verification (unchanged backend/provider baseline)
 
 Final local verification finished October 17 UTC; the requested October 16
 report path is retained.
@@ -491,7 +572,7 @@ local suite results above are the evidence recorded here.
 
 ## Every changed file
 
-50 files relative to refreshed main:
+52 files relative to refreshed main:
 
 - `.env.example`
 - `.github/workflows/ci.yml`
@@ -528,7 +609,9 @@ local suite results above are the evidence recorded here.
 - `frontend/src/components/Converter.test.tsx`
 - `frontend/src/components/Converter.tsx`
 - `frontend/src/components/Pricing.tsx`
+- `frontend/src/components/Pricing.test.tsx`
 - `frontend/src/components/PrivacyControls.tsx`
+- `frontend/src/components/PrivacyControls.test.tsx`
 - `frontend/src/i18n/locales/en.ts`
 - `frontend/src/i18n/locales/es.ts`
 - `frontend/src/i18n/locales/it.ts`
