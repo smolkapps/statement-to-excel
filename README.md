@@ -63,6 +63,10 @@ statement-to-excel/
 
 ### Backend (API + engine)
 
+Use Python 3.11 or later for the server extra, which pins Pillow 13.0.0 and
+certifi 2026.10.19 for the public service. The standalone CLI retains the
+project's Python 3.9 minimum.
+
 ```bash
 cd backend
 python3 -m venv .venv && . .venv/bin/activate

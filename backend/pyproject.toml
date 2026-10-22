@@ -21,7 +21,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-server = ["uvicorn>=0.29"]
+server = [
+    "uvicorn>=0.29",
+    "pillow==13.0.0",
+    "certifi==2026.10.19",
+]
 test = [
     "pytest>=8.0",
     "reportlab>=4.0",
