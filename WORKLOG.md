@@ -113,3 +113,30 @@ setup; no other shared endpoint/default/key touched. No merge/deploy/activation.
 
 Verified D implementation: 6d4ea66144faf9c19a830d9ca84e6698c8b8b526. Final PR delivery
 head includes the report update; no extra CI pass gate or idle polling.
+
+## 2026-10-29 UTC — five-persona launch QA
+
+Checked existing QA evidence, clean worktree/processes and open PRs first; no
+running five-persona pass found. Five independent real Chromium personas used
+synthetic statements only. Production navigation for all five was blocked by
+ERR_CERT_AUTHORITY_INVALID through the inherited proxy; TLS/security settings
+were preserved. All five reached first success against the real local API.
+
+Implementation 04e34661e78ab8bf3b47b7b893bf8fba8a0b67aa fixes mobile anchor
+obstruction/select sizing, literal instructions, localized decimal display,
+immediate invalid-file rejection/recovery and unmetered cost clarity. Added
+use/limits and a privacy link. Skeptic's wording follow-up was corrected and all
+five reran fresh on the final candidate: actual XLSX, exact rows and independently
+checked Checks arithmetic. Formal owner-approved Terms remain unavailable.
+
+231 frontend tests, SEO/TypeScript/Vite build, routing2, canonical backend579,
+accuracy22/14families/372exact rows/zero silent errors/false alarms pass.
+Chromium18 pass/13 existing SDK-fixture-dependent cases skip/0fail; missing SDK
+fixtures are explicit, not substituted. Initial backend root-CWD invocation's
+24 failures retained; documented backend-CWD run passes without backend edits.
+375px Slow3G/touch emulation only; xcrun/physical device unavailable.
+
+Evidence and ranked persona counts: docs/codex-launch-qa-2026-10-29.md. Local
+screenshots/reports/scripts/downloads retained under work/launch-qa, exported as
+requested. Unrelated work preserved; no production writes, purchases, email,
+credentials/security changes, merge or deployment. Draft PR only.
