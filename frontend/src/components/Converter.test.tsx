@@ -259,6 +259,41 @@ describe("Converter", () => {
     expect(convertStatement).toHaveBeenCalledTimes(1);
   });
 
+  it.each(LOCALE_ORDER.flatMap((locale) => [
+    [locale, "text", "convert_error_file_type"],
+    [locale, "empty", "convert_error_file_empty"],
+    [locale, "oversized", "convert_error_file_size"],
+  ] as const))("rejects an invalid %s %s selection before conversion and recovers with a valid PDF", async (locale, kind, messageKey) => {
+    convertStatement.mockResolvedValue(outcome(1));
+    renderConverter({ accountId: "web_test" }, locale);
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const button = screen.getByRole("button", { name: LOCALES[locale].convert_button });
+    const valid = new File(["%PDF-1.4 synthetic statement"], "statement.pdf", { type: "application/pdf" });
+    fireEvent.change(input, { target: { files: [valid] } });
+    expect(button).toBeEnabled();
+
+    const invalid = kind === "text"
+      ? new File(["synthetic plain text"], "statement.txt", { type: "text/plain" })
+      : kind === "empty"
+        ? new File([], "empty.pdf", { type: "application/pdf" })
+        : new File([new Uint8Array(20 * 1024 * 1024 + 1)], "large.pdf", { type: "application/pdf" });
+    fireEvent.change(input, { target: { files: [invalid] } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(LOCALES[locale][messageKey]);
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(convertStatement).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: LOCALES[locale].convert_download })).not.toBeInTheDocument();
+
+    fireEvent.change(input, { target: { files: [valid] } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByText("ACH PAYROLL DEPOSIT")).toBeInTheDocument());
+    expect(convertStatement).toHaveBeenCalledTimes(1);
+    expect(convertStatement).toHaveBeenCalledWith(valid, { accountId: "web_test", fmt: "xlsx", currency: "USD" });
+  });
+
   const states = ["deposit", "card", "not_balanced", "cannot_check"] as const;
   it.each(LOCALE_ORDER.flatMap((locale) => states.map((state) => [locale, state] as const)))
     ("shows the %s locale's %s status with only privacy-safe analytics properties", async (locale, state) => {
@@ -321,6 +356,34 @@ describe("Converter", () => {
     renderConverter({});
     selectFileAndConvert();
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Doesn't balance: off by $100.00. Check the highlighted rows."));
+  });
+
+  it("uses Spanish decimal conventions for visible results without losing exact decimal digits", async () => {
+    const converted = outcome(1);
+    converted.result.reconciliation = undefined;
+    converted.result.transactions[0].amount = "9007199254740993.0123";
+    converted.result.transactions[0].balance = "-0.05";
+    converted.result.transactions.push({
+      ...converted.result.transactions[0], description: "SYNTHETIC NO BALANCE", amount: "-0.05", balance: null,
+    });
+    converted.result.summary.total_credit = "9007199254740993.0123";
+    converted.result.summary.total_debit = "0.05";
+    converted.result.summary.net = "9007199254740992.9623";
+    convertStatement.mockResolvedValue(converted);
+    renderConverter({}, "es");
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[type="file"]')!, {
+      target: { files: [new File(["%PDF-1.4"], "synthetic.pdf", { type: "application/pdf" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Convertir" }));
+    await waitFor(() => expect(screen.getByText("ACH PAYROLL DEPOSIT")).toBeInTheDocument());
+    const totals = Array.from(document.querySelectorAll(".summary-strip strong")).slice(1).map((cell) => cell.textContent);
+    expect(totals).toEqual(["0,05", "9.007.199.254.740.993,0123", "9.007.199.254.740.992,9623"]);
+    const rows = document.querySelectorAll(".results tbody tr");
+    expect(rows[0].querySelectorAll(".num")[0]).toHaveTextContent("9.007.199.254.740.993,0123");
+    expect(rows[0].querySelectorAll(".num")[1]).toHaveTextContent("-0,05");
+    expect(rows[1].querySelectorAll(".num")[1]).toBeEmptyDOMElement();
+    expect(converted.result.transactions[0].amount).toBe("9007199254740993.0123");
+    expect(converted.result.transactions[0].balance).toBe("-0.05");
   });
 
   it("includes flagged rows beyond the first 50 with their original indices", async () => {

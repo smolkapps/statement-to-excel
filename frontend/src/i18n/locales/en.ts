@@ -1,6 +1,12 @@
 import type { Translation } from "../types";
 
 export const en: Translation = {
+  conversion_no_payment: "Conversion is currently available without payment. No sign-in is needed.",
+  convert_limits_title: "Use and limits",
+  convert_limits_body: "Each PDF must contain a single bank account, selectable text and no password. Maximum 20 MiB and 100 pages. Scanned pages need OCR first. Check the extracted rows before using them; matching totals do not verify every transaction.",
+  convert_error_file_type: "Choose a PDF file (.pdf).",
+  convert_error_file_empty: "This file is empty. Choose a PDF with statement pages.",
+  convert_error_file_size: "This PDF exceeds 20 MiB. Choose a smaller file or split it first.",
   locale_name: "English",
   nav_product: "Product",
   nav_pricing: "Pricing",
@@ -25,8 +31,8 @@ export const en: Translation = {
 
   how_title: "How it works",
   how_step1: "1. Upload your statement PDF",
-  how_step2: "2. We detect the transaction table automatically",
-  how_step3: "3. Download a clean spreadsheet",
+  how_step2: "2. Click Convert to extract your transactions",
+  how_step3: "3. Wait for conversion, then download your spreadsheet",
 
   convert_title: "Convert a statement",
   convert_drop: "Drop a PDF here, or click to choose",

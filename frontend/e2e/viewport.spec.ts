@@ -21,7 +21,7 @@ for name, options in [('reconciled', {}), ('off-by-one', {'closing': '111.00'}),
   expect(generated.status, generated.stderr).toBe(0);
 });
 
-for (const viewport of [{ width: 1365, height: 900 }, { width: 390, height: 844 }]) {
+for (const viewport of [{ width: 1365, height: 900 }, { width: 375, height: 812 }]) {
   test(`${viewport.width}x${viewport.height} conversion, reconciliation and download journeys stay usable`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     // Test only the local stack; never send synthetic conversion activity to
@@ -48,6 +48,18 @@ for (const viewport of [{ width: 1365, height: 900 }, { width: 390, height: 844 
     });
     await page.goto("/");
     await expect(page.locator("#pricing")).toHaveCount(0);
+    await page.getByRole("link", { name: "Convert a statement", exact: true }).click();
+    const header = await page.locator(".site-header").boundingBox();
+    const title = await page.locator("#convert h2").boundingBox();
+    expect(title!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
+    for (const select of await page.locator("select").all()) {
+      expect((await select.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    }
+    await page.locator(".conversion-limits summary").click();
+    await expect(page.locator(".conversion-limits")).toContainText("20 MiB and 100 pages");
+    await page.locator(".conversion-limits a").click();
+    await page.locator("#privacy summary").click();
+    await expect(page.locator("#privacy")).toContainText("No statement data is stored.");
     await page.screenshot({ path: testInfo.outputPath("upload.png"), fullPage: true });
 
     const scenarios = [

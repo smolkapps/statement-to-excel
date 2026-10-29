@@ -16,6 +16,7 @@ export interface Translation {
   hero_cta: string;
   hero_secondary_cta: string;
   hero_trust: string;
+  conversion_no_payment: string;
 
   // value props
   feature_accuracy_title: string;
@@ -35,6 +36,11 @@ export interface Translation {
   convert_title: string;
   convert_drop: string;
   convert_drop_hint: string;
+  convert_limits_title: string;
+  convert_limits_body: string;
+  convert_error_file_type: string;
+  convert_error_file_empty: string;
+  convert_error_file_size: string;
   convert_format: string;
   convert_currency: string;
   convert_button: string;

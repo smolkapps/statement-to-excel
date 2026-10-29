@@ -1,6 +1,6 @@
 import { useI18n } from "../i18n/I18nContext";
 
-export function Hero({ showPricing = false }: { showPricing?: boolean }) {
+export function Hero({ showPricing = false, unmetered = false }: { showPricing?: boolean; unmetered?: boolean }) {
   const { t } = useI18n();
   return (
     <section className="hero" id="product">
@@ -18,6 +18,7 @@ export function Hero({ showPricing = false }: { showPricing?: boolean }) {
         )}
       </div>
       <p className="trust">{t.hero_trust}</p>
+      {unmetered && <p className="availability-note">{t.conversion_no_payment}</p>}
     </section>
   );
 }

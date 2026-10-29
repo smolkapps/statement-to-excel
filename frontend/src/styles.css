@@ -53,10 +53,20 @@ body {
 }
 
 .app {
+  --header-height: 100px;
   max-width: var(--maxw);
   margin: 0 auto;
   padding: 0 20px 80px;
 }
+
+#product, #convert, #pricing, #privacy {
+  scroll-margin-top: calc(var(--header-height) + 16px);
+}
+
+.availability-note { color: var(--brand-2); }
+.conversion-limits { margin: 0 0 20px; color: var(--muted); }
+.conversion-limits summary { cursor: pointer; min-height: 44px; }
+.conversion-limits a { color: var(--brand-2); }
 
 /* Header */
 .site-header {
@@ -112,6 +122,7 @@ body {
 }
 .locale-switcher select,
 .convert-controls select {
+  min-height: 44px;
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);

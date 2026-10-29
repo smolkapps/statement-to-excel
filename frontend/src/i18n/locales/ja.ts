@@ -1,6 +1,12 @@
 import type { Translation } from "../types";
 
 export const ja: Translation = {
+  conversion_no_payment: "現在、変換はお支払いなしで利用できます。サインインは不要です。",
+  convert_limits_title: "利用方法と制限",
+  convert_limits_body: "各PDFには1つの銀行口座のみを含め、選択可能なテキストがあり、パスワードがない状態にしてください。上限は20 MiB、100ページです。スキャンしたページは事前にOCRが必要です。利用前に抽出行を確認してください。合計の一致だけでは、すべての取引が正しいとは確認できません。",
+  convert_error_file_type: "PDFファイル（.pdf）を選択してください。",
+  convert_error_file_empty: "このファイルは空です。明細ページのあるPDFを選択してください。",
+  convert_error_file_size: "このPDFは20 MiBを超えています。小さいファイルを選ぶか、事前に分割してください。",
   locale_name: "日本語",
   nav_product: "製品",
   nav_pricing: "料金",
@@ -25,8 +31,8 @@ export const ja: Translation = {
 
   how_title: "使い方",
   how_step1: "1. 明細PDFをアップロード",
-  how_step2: "2. 取引テーブルを自動で検出",
-  how_step3: "3. きれいな表をダウンロード",
+  how_step2: "2. 「変換」をクリックして取引を抽出",
+  how_step3: "3. 変換の完了を待ってから表をダウンロード",
 
   convert_title: "明細を変換",
   convert_drop: "ここにPDFをドロップ、またはクリックして選択",

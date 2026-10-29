@@ -1,6 +1,12 @@
 import type { Translation } from "../types";
 
 export const zh: Translation = {
+  conversion_no_payment: "目前无需付费即可转换，无需登录。",
+  convert_limits_title: "使用方法与限制",
+  convert_limits_body: "每个PDF只能包含一个银行账户，须有可选文本且无密码，最大20 MiB、100页。扫描页面需要先进行OCR。使用前请核对提取的行；总额一致并不代表每笔交易均已核实。",
+  convert_error_file_type: "请选择PDF文件（.pdf）。",
+  convert_error_file_empty: "此文件为空。请选择包含账单页面的PDF。",
+  convert_error_file_size: "此PDF超过20 MiB。请选择较小的文件或先拆分。",
   locale_name: "中文",
   nav_product: "产品",
   nav_pricing: "价格",
@@ -25,8 +31,8 @@ export const zh: Translation = {
 
   how_title: "使用方法",
   how_step1: "1. 上传您的对账单 PDF",
-  how_step2: "2. 我们自动识别交易表格",
-  how_step3: "3. 下载干净的表格",
+  how_step2: "2. 点击“转换”提取交易记录",
+  how_step3: "3. 等待转换完成，然后下载表格",
 
   convert_title: "转换对账单",
   convert_drop: "将 PDF 拖到此处，或点击选择",
