@@ -125,3 +125,15 @@ report-only commits do not change the built application.
 No merge or deployment is authorized by this task. Review the draft PR and
 resolve production access/owner content separately; do not call this a complete
 production launch pass.
+
+## Draft PR delivery blocker
+
+The feature branch push succeeded. Creating a **draft** PR in
+`smolkapps/statement-to-excel` (head `qa/five-persona-20261029`, base `main`)
+was **denied by automatic approval review**. Its stated reason: creating and
+publishing the draft PR is an external repository commitment, and no trusted
+user message explicitly authorizes opening it. No PR was created, and the denied
+action was not retried or routed through another tool. The prepared title/body
+are included as `draft-pr.md` in the evidence bundle. Explicit user approval is
+needed to perform that remaining publication action. The implementation,
+verification, branch push and evidence package are complete independently.
