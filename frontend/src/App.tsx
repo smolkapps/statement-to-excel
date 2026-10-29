@@ -62,6 +62,7 @@ export default function App() {
   const [account, setAccount] = useState<AccountState>(() => newAccount());
   const [accountId] = useState(getAccountId);
   const [checkoutAvailable, setCheckoutAvailable] = useState(false);
+  const [availabilityKnown, setAvailabilityKnown] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [checkoutError, setCheckoutError] = useState(false);
   const [storageError, setStorageError] = useState(false);
@@ -79,6 +80,7 @@ export default function App() {
     let cancelled = false;
     void fetchCheckoutAvailability().then((available) => {
       if (cancelled) return;
+      setAvailabilityKnown(true);
       if (available) {
         billingActive.current = true;
         setCheckoutAvailable(true);
@@ -208,7 +210,7 @@ export default function App() {
       }}>{t.billing_manage}</button>}
       {checkoutAvailable && billingHold && <p className="convert-error" role="alert">{t.billing_hold}</p>}
       <main>
-        <Hero showPricing={checkoutAvailable} />
+        <Hero showPricing={checkoutAvailable} unmetered={availabilityKnown && !checkoutAvailable} />
         <Features />
         <HowItWorks />
         <Converter accountId={accountId} onCharged={() => void refreshAccount().catch(() => {})} />

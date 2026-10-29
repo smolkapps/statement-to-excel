@@ -1,6 +1,12 @@
 import type { Translation } from "../types";
 
 export const es: Translation = {
+  conversion_no_payment: "La conversión está disponible actualmente sin pago. No necesitas iniciar sesión.",
+  convert_limits_title: "Uso y límites",
+  convert_limits_body: "Cada PDF debe contener una sola cuenta bancaria, texto seleccionable y ninguna contraseña. Máximo 20 MiB y 100 páginas. Las páginas escaneadas necesitan OCR primero. Revisa las filas extraídas antes de usarlas; que los totales coincidan no verifica cada transacción.",
+  convert_error_file_type: "Elige un archivo PDF (.pdf).",
+  convert_error_file_empty: "Este archivo está vacío. Elige un PDF con páginas de un extracto.",
+  convert_error_file_size: "Este PDF supera los 20 MiB. Elige un archivo más pequeño o divídelo primero.",
   locale_name: "Español",
   nav_product: "Producto",
   nav_pricing: "Precios",
@@ -25,8 +31,8 @@ export const es: Translation = {
 
   how_title: "Cómo funciona",
   how_step1: "1. Sube el PDF de tu extracto",
-  how_step2: "2. Detectamos la tabla de transacciones automáticamente",
-  how_step3: "3. Descarga una hoja de cálculo limpia",
+  how_step2: "2. Haz clic en Convertir para extraer tus transacciones",
+  how_step3: "3. Espera a que termine la conversión y descarga tu hoja de cálculo",
 
   convert_title: "Convertir un extracto",
   convert_drop: "Suelta un PDF aquí o haz clic para elegir",

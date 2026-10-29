@@ -19,7 +19,7 @@ export function PrivacyControls() {
   }, []);
   const choose = (value: boolean) => { const result = setAnalyticsConsent(value); setAllowed(result.allowed); setSaveFailed(!result.saved); setNextVisit(result.nextVisit); };
   return <div className="privacy-controls">
-    <details><summary>{t.privacy_title}</summary><p>{t.hero_trust}</p><p>{t.privacy_billing}</p><p>{t.privacy_analytics}</p></details>
+    <details id="privacy"><summary>{t.privacy_title}</summary><p>{t.hero_trust}</p><p>{t.privacy_billing}</p><p>{t.privacy_analytics}</p></details>
     {optionalAnalyticsConfigured() && <section aria-label={t.analytics_choice}>
       <p>{t.analytics_consent}</p>
       <button className="btn btn-outline" aria-pressed={allowed === true} onClick={() => choose(true)}>{t.analytics_allow}</button>{' '}

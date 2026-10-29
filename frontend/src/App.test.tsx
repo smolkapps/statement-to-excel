@@ -62,6 +62,7 @@ describe("server-authoritative checkout", () => {
     expect(document.querySelectorAll('a[href="#pricing"]')).toHaveLength(0);
     expect(screen.queryByLabelText(LOCALES[locale].account_title)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: LOCALES[locale].convert_button })).toBeInTheDocument();
+    expect(screen.getByText(LOCALES[locale].conversion_no_payment)).toBeInTheDocument();
     expect(fetchAccount).not.toHaveBeenCalled();
     expect(fetchCheckoutStatus).not.toHaveBeenCalled();
     expect(openCheckout).not.toHaveBeenCalled();
@@ -74,6 +75,7 @@ describe("server-authoritative checkout", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: LOCALES[locale].billing_manage })).toBeInTheDocument());
     expect(screen.getByText(LOCALES[locale].billing_recovery)).toBeInTheDocument();
     expect(screen.getByText(LOCALES[locale].privacy_billing)).toBeInTheDocument();
+    expect(screen.queryByText(LOCALES[locale].conversion_no_payment)).not.toBeInTheDocument();
   });
 
   it.each(LOCALE_ORDER)("blocks payment when storage is unavailable in %s while conversion remains usable", async (locale) => {
@@ -123,6 +125,7 @@ describe("server-authoritative checkout", () => {
     expect(fetchCheckoutStatus).not.toHaveBeenCalled();
     expect(openCheckout).not.toHaveBeenCalled();
     expect(screen.queryByText("Backend billing configuration is secret")).not.toBeInTheDocument();
+    expect(screen.queryByText(LOCALES.en.conversion_no_payment)).not.toBeInTheDocument();
   });
 
   it("waits for authoritative availability and ignores its response after unmount", async () => {
@@ -132,6 +135,7 @@ describe("server-authoritative checkout", () => {
     window.history.replaceState({}, "", "/?checkout=success&session_id=cs_old");
     const rendered = render(<I18nProvider initialLocale="en"><App /></I18nProvider>);
     fireEvent.focus(window);
+    expect(screen.queryByText(LOCALES.en.conversion_no_payment)).not.toBeInTheDocument();
     expect(document.querySelector("#pricing")).toBeNull();
     expect(document.querySelectorAll('a[href="#pricing"]')).toHaveLength(0);
     expect(screen.queryByLabelText(LOCALES.en.account_title)).not.toBeInTheDocument();

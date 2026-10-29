@@ -32,12 +32,25 @@ export function Converter({ accountId, onCharged }: Props) {
 
   const selectFile = useCallback((selected: File | null) => {
     if (pendingRef.current) return;
-    setFile(selected);
     setResult(null);
     setDownload(null);
     setError(null);
+    setFile(null);
+    if (selected && !/\.pdf$/i.test(selected.name)) {
+      setError(t.convert_error_file_type);
+      return;
+    }
+    if (selected?.size === 0) {
+      setError(t.convert_error_file_empty);
+      return;
+    }
+    if (selected && selected.size > 20 * 1024 * 1024) {
+      setError(t.convert_error_file_size);
+      return;
+    }
+    setFile(selected);
     if (selected) track("file-selected");
-  }, []);
+  }, [t]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -109,6 +122,11 @@ export function Converter({ accountId, onCharged }: Props) {
   return (
     <section className="converter" id="convert">
       <h2>{t.convert_title}</h2>
+      <details className="conversion-limits">
+        <summary>{t.convert_limits_title}</summary>
+        <p>{t.convert_limits_body}</p>
+        <a href="#privacy">{t.privacy_title}</a>
+      </details>
 
       <div
         className={`dropzone${dragging ? " dragging" : ""}${file ? " has-file" : ""}`}
@@ -122,7 +140,10 @@ export function Converter({ accountId, onCharged }: Props) {
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            if (!pendingRef.current) inputRef.current?.click();
+          }
         }}
         aria-label={t.convert_drop}
       >
@@ -132,7 +153,10 @@ export function Converter({ accountId, onCharged }: Props) {
           accept="application/pdf,.pdf"
           hidden
           disabled={busy}
-          onChange={(e) => selectFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => {
+            selectFile(e.target.files?.[0] ?? null);
+            e.target.value = "";
+          }}
         />
         <div className="dropzone-inner">
           <span className="dropzone-icon" aria-hidden="true">
@@ -197,6 +221,18 @@ function ResultsTable({ result }: { result: ConvertJsonResult }) {
   const reconciliation = result.reconciliation;
   const status = reconciliationStatus(reconciliation);
   const money = (value: string) => formatStatementMoney(value, s.currency, locale);
+  // Match the reconciliation's decimal conventions without changing the exact
+  // values or adding currency symbols to the existing table and summary cells.
+  const number = (value: string) => {
+    const [integer, fraction = ""] = value.split(".");
+    const precision = Math.max(2, fraction.length);
+    const whole = BigInt(integer);
+    const amount = value.startsWith("-") && whole === 0n ? -0 : whole;
+    return new Intl.NumberFormat(locale, {
+      minimumFractionDigits: precision, maximumFractionDigits: precision,
+    }).formatToParts(amount)
+      .map((part) => part.type === "fraction" ? fraction.padEnd(precision, "0") : part.value).join("");
+  };
   let statusLine = t.reconciliation_cannot_check;
   if (reconciliation && status === "balanced") {
     const template = reconciliation.account_type === "card"
@@ -231,13 +267,13 @@ function ResultsTable({ result }: { result: ConvertJsonResult }) {
           <strong>{s.count}</strong> {t.summary_count}
         </span>
         <span>
-          {t.summary_debit}: <strong>{s.total_debit}</strong>
+          {t.summary_debit}: <strong>{number(s.total_debit)}</strong>
         </span>
         <span>
-          {t.summary_credit}: <strong>{s.total_credit}</strong>
+          {t.summary_credit}: <strong>{number(s.total_credit)}</strong>
         </span>
         <span>
-          {t.summary_net}: <strong>{s.net}</strong>
+          {t.summary_net}: <strong>{number(s.net)}</strong>
         </span>
       </div>
       <h3>{t.convert_results_title}</h3>
@@ -259,8 +295,8 @@ function ResultsTable({ result }: { result: ConvertJsonResult }) {
                   {row.description}
                   {rowNotes.has(i) && <small className="row-flag-note">{rowNotes.get(i)}</small>}
                 </td>
-                <td className={`num ${row.type}`}>{row.amount}</td>
-                <td className="num">{row.balance ?? ""}</td>
+                <td className={`num ${row.type}`}>{number(row.amount)}</td>
+                <td className="num">{row.balance === null ? "" : number(row.balance)}</td>
               </tr>
             ))}
           </tbody>

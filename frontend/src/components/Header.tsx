@@ -1,10 +1,22 @@
 import { useI18n } from "../i18n/I18nContext";
 import { LOCALE_ORDER, LOCALES, type LocaleCode } from "../i18n";
+import { useLayoutEffect, useRef } from "react";
 
 export function Header({ showPricing = false }: { showPricing?: boolean }) {
   const { t, locale, setLocale } = useI18n();
+  const header = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const element = header.current;
+    if (!element) return;
+    const measure = () => element.parentElement?.style.setProperty("--header-height", `${element.getBoundingClientRect().height}px`);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   return (
-    <header className="site-header">
+    <header className="site-header" ref={header}>
       <a href="#top" className="brand" aria-label="Statement→Excel home">
         <span className="brand-mark" aria-hidden="true">
           ⇲
